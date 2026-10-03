@@ -1,0 +1,74 @@
+# Miscellaneous
+# Local credentials, runtime state and generated dependencies
+node_modules/
+.tmp_dart_local/
+.tmp/
+.env
+.env.*
+!.env.example
+*service-account*.json
+*serviceAccount*.json
+firebase-adminsdk*.json
+*.pem
+*.p12
+*.key
+*.keystore
+*.jks
+key.properties
+firebase-export*/
+firestore-export*/
+auth_export*.json
+*.sqlite
+*.db
+*.zip
+*.apk
+!/EdhiConnect.apk
+tools/firebase-rules/node_modules/
+functions/node_modules/
+functions/.env*
+!functions/.env.example
+*-debug.log
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ related
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# The .vscode folder contains launch configuration and tasks you configure in
+# VS Code which you may wish to be included in version control, so this line
+# is commented out by default.
+#.vscode/
+
+# Flutter/Dart/Pub related
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication related
+app.*.symbols
+
+# Obfuscation related
+app.*.map.json
+
+# Android Studio will place build artifacts here
+/android/app/debug
+/android/app/profile
+/android/app/release

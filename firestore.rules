@@ -1,0 +1,246 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profile() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function active() { return signedIn() && profile().isActive == true; }
+    function admin() { return active() && profile().role == 'admin'; }
+    function driver() { return active() && profile().role == 'employee'; }
+    function owned() { return active() && resource.data.userId == request.auth.uid; }
+    function assigned() { return driver() && resource.data.assignedEmployeeId != null
+      && get(/databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId)).data.userId == request.auth.uid; }
+    function validGroup(group) { return group in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']; }
+    function completesResponse(id) {
+      let employeePath = /databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId);
+      return resource.data.status == 'Arrived' && request.resource.data.status == 'Completed'
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && get(employeePath).data.status == 'busy' && get(employeePath).data.activeRequestId == id
+        && getAfter(employeePath).data.status == 'available' && getAfter(employeePath).data.activeRequestId == ''
+        && getAfter(employeePath).data.speedKmh == 0;
+    }
+    function releasesCompletedResponse(employeeId) {
+      let path = /databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId);
+      let before = get(path).data;
+      let after = getAfter(path).data;
+      return active() && resource.data.status == 'busy'
+        && request.resource.data.status == 'available' && request.resource.data.activeRequestId == '' && request.resource.data.speedKmh == 0
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'activeRequestId', 'speedKmh'])
+        && before.status == 'Arrived' && before.assignedEmployeeId == employeeId
+        && after.status == 'Completed' && after.updatedAt == request.time
+        && (before.userId == request.auth.uid || (driver() && resource.data.userId == request.auth.uid));
+    }
+    function canRequestEmergency(uid) {
+      let path = /databases/$(database)/documents/emergency_usage/$(uid);
+      return !exists(path) || get(path).data.banStartedAt == null
+        || request.time >= get(path).data.banStartedAt + duration.value(24, 'h');
+    }
+    function releasesCancelledResponse(employeeId) {
+      let path = /databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId);
+      let before = get(path).data;
+      let after = getAfter(path).data;
+      return active() && resource.data.status == 'busy'
+        && before.userId == request.auth.uid && before.assignedEmployeeId == employeeId
+        && before.status in ['Pending', 'Approved', 'Assigned', 'InProgress', 'Arrived']
+        && after.status == 'Cancelled' && after.updatedAt == request.time
+        && request.resource.data.status == 'available' && request.resource.data.activeRequestId == '' && request.resource.data.speedKmh == 0
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'activeRequestId', 'speedKmh']);
+    }
+    function cancellationReleasesUnit(id) {
+      let employeeId = resource.data.assignedEmployeeId;
+      return employeeId == null || employeeId == ''
+        || get(/databases/$(database)/documents/employees/$(employeeId)).data.activeRequestId != id
+        || (getAfter(/databases/$(database)/documents/employees/$(employeeId)).data.status == 'available'
+          && getAfter(/databases/$(database)/documents/employees/$(employeeId)).data.activeRequestId == ''
+          && getAfter(/databases/$(database)/documents/employees/$(employeeId)).data.speedKmh == 0
+          && (!exists(/databases/$(database)/documents/route_demos/$(employeeId))
+            || get(/databases/$(database)/documents/route_demos/$(employeeId)).data.requestId != id
+            || get(/databases/$(database)/documents/route_demos/$(employeeId)).data.enabled == false
+            || (getAfter(/databases/$(database)/documents/route_demos/$(employeeId)).data.enabled == false
+              && getAfter(/databases/$(database)/documents/route_demos/$(employeeId)).data.stoppedAt == request.time)));
+    }
+    function validCancellationUsage(uid) {
+      let next = request.resource.data;
+      let jobPath = /databases/$(database)/documents/emergency_requests/$(next.lastCancelledRequestId);
+      let usagePath = /databases/$(database)/documents/emergency_usage/$(uid);
+      let reset = !exists(usagePath) || request.time >= get(usagePath).data.windowStartedAt + duration.value(24, 'h');
+      let count = reset ? 1 : get(usagePath).data.cancellationCount + 1;
+      return active() && uid == request.auth.uid && canRequestEmergency(uid)
+        && next.keys().hasOnly(['cancellationCount', 'windowStartedAt', 'banStartedAt', 'lastCancelledRequestId'])
+        && count <= 3 && next.cancellationCount == count
+        && next.windowStartedAt == (reset ? request.time : get(usagePath).data.windowStartedAt)
+        && next.banStartedAt == (count == 3 ? request.time : null)
+        && get(jobPath).data.userId == uid
+        && get(jobPath).data.status in ['Pending', 'Approved', 'Assigned', 'InProgress', 'Arrived']
+        && getAfter(jobPath).data.status == 'Cancelled'
+        && getAfter(jobPath).data.updatedAt == request.time;
+    }
+    match /emergency_usage/{uid} {
+      allow get: if active() && request.auth.uid == uid || admin();
+      allow list: if admin();
+      allow create, update: if validCancellationUsage(uid);
+      allow delete: if false;
+    }
+    match /route_demos/{employeeId} {
+      // Private simulated journeys: only admin controls routes and trip stages.
+      allow get: if admin() || (active() &&
+        ((exists(/databases/$(database)/documents/route_demos/$(employeeId))
+          && (resource.data.userId == request.auth.uid || resource.data.driverUserId == request.auth.uid))
+        || (!exists(/databases/$(database)/documents/route_demos/$(employeeId))
+          && (get(/databases/$(database)/documents/employees/$(employeeId)).data.userId == request.auth.uid
+            || get(/databases/$(database)/documents/emergency_requests/$(get(/databases/$(database)/documents/employees/$(employeeId)).data.activeRequestId)).data.userId == request.auth.uid))));
+      allow list: if admin() || (active() && (resource.data.userId == request.auth.uid || resource.data.driverUserId == request.auth.uid));
+      allow create, delete: if admin();
+      allow update: if admin() || (active()
+        && resource.data.enabled == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'stoppedAt'])
+        && request.resource.data.enabled == false
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['stoppedAt']) || request.resource.data.stoppedAt == request.time)
+        && getAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.requestId)).data.status in ['Arrived', 'Completed', 'Cancelled']
+        && (getAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.requestId)).data.userId == request.auth.uid
+          || get(/databases/$(database)/documents/employees/$(employeeId)).data.userId == request.auth.uid));
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid || admin();
+      allow list: if admin();
+      allow create: if admin() || (signedIn() && request.auth.uid == uid
+        && request.resource.data.role in ['user', 'employee'] && request.resource.data.isActive == true
+        && request.resource.data.cnic.matches('[1-7][0-9]{4}-[0-9]{7}-[0-9]')
+        && request.resource.data.phone.matches('[+]923[0-9]{9}')
+        && request.auth.token.email == request.resource.data.authEmail
+        && (request.resource.data.authEmail == request.resource.data.cnic.replace('-', '') + '@citizen.edhi.org'
+          || (request.resource.data.authEmail.matches('account_[A-Za-z0-9_-]{22}@citizen[.]edhi[.]org')
+            && getAfter(/databases/$(database)/documents/login_aliases/$("cnic_" + request.resource.data.cnic.replace('-', ''))).data.authEmail == request.resource.data.authEmail
+            && getAfter(/databases/$(database)/documents/login_aliases/$("phone_" + request.resource.data.phone)).data.authEmail == request.resource.data.authEmail))
+        && getAfter(/databases/$(database)/documents/phone_claims/$(request.resource.data.phone)).data.userId == uid);
+      allow update: if admin() || (active() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'address', 'profileImage', 'fcmTokens', 'fcmToken', 'updatedAt']));
+      allow delete: if admin();
+    }
+    match /login_aliases/{identifier} {
+      // Exact username lookup exposes only an opaque Auth address. Password
+      // verification and all personal data access still require Firebase Auth.
+      allow get: if true;
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['authEmail'])
+        && request.resource.data.authEmail == request.auth.token.email
+        && request.resource.data.authEmail.matches('account_[A-Za-z0-9_-]{22}@citizen[.]edhi[.]org')
+        && (identifier == 'cnic_' + getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.cnic.replace('-', '')
+          || identifier == 'phone_' + getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone);
+      allow update: if false;
+      allow delete: if admin();
+    }
+    match /phone_claims/{phone} {
+      allow get: if signedIn();
+      allow create: if signedIn() && request.resource.data.keys().hasOnly(['userId'])
+        && request.resource.data.userId == request.auth.uid
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.phone == phone;
+      allow update, delete, list: if admin();
+    }
+    match /driver_links/{uid} {
+      allow get: if admin() || (active() && request.auth.uid == uid);
+      allow list, create, update, delete: if admin();
+    }
+    match /emergency_requests/{id} {
+      allow read: if admin() || owned() || assigned();
+      allow create: if active() && canRequestEmergency(request.auth.uid) && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'Pending'
+        && request.resource.data.assignedEmployeeId == null
+        && request.resource.data.createdAt == request.time;
+      allow update: if admin()
+        || (owned() && completesResponse(id))
+        || (owned() && resource.data.status in ['Pending', 'Approved', 'Assigned', 'InProgress', 'Arrived']
+          && request.resource.data.status == 'Cancelled'
+          && request.time < resource.data.createdAt + duration.value(60, 's')
+          && request.time >= resource.data.createdAt
+          && request.resource.data.updatedAt == request.time
+          && getAfter(/databases/$(database)/documents/emergency_usage/$(request.auth.uid)).data.lastCancelledRequestId == id
+          && cancellationReleasesUnit(id)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']))
+        || (assigned() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt'])
+          && (((resource.data.status == 'Assigned' && request.resource.data.status == 'InProgress')
+            || (resource.data.status == 'InProgress' && request.resource.data.status == 'Arrived'))
+              && get(/databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId)).data.get('isSimulated', true) == false
+            || completesResponse(id)));
+      allow delete: if admin();
+    }
+    match /employees/{id} {
+      allow read: if active();
+      allow create, delete: if admin();
+      allow update: if admin() || releasesCompletedResponse(id) || releasesCancelledResponse(id) || (driver() && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentLat', 'currentLng', 'transitLastHeartbeat', 'transitRunnerSession', 'speedKmh', 'updatedAt', 'locationUpdatedAt'])
+        && request.resource.data.status in ['available', 'busy', 'offline']
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['locationUpdatedAt', 'currentLat', 'currentLng'])
+          || (resource.data.get('isSimulated', true) == false
+            && request.resource.data.currentLat is number && request.resource.data.currentLat >= -90 && request.resource.data.currentLat <= 90
+            && request.resource.data.currentLng is number && request.resource.data.currentLng >= -180 && request.resource.data.currentLng <= 180
+            && request.resource.data.locationUpdatedAt == request.time))
+        && (resource.data.status != 'busy' || request.resource.data.status == 'busy'
+          || (existsAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId))
+            && getAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId)).data.status in ['Completed', 'Cancelled'])));
+    }
+    match /blood_donors/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.userId == request.auth.uid && validGroup(request.resource.data.bloodGroup);
+      allow update: if admin() || (owned() && request.resource.data.userId == resource.data.userId && validGroup(request.resource.data.bloodGroup));
+      allow delete: if admin() || owned();
+    }
+    match /blood_needs/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.userId == request.auth.uid
+        && request.resource.data.status == 'active' && validGroup(request.resource.data.bloodGroup)
+        && request.resource.data.unitsNeeded > 0 && request.resource.data.unitsNeeded <= 20;
+      allow update: if admin() || (owned() && request.resource.data.status == 'cancelled'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt']));
+      allow delete: if admin();
+    }
+    match /missing_persons/{id} {
+      allow read: if active();
+      allow create: if active() && request.resource.data.userId == request.auth.uid
+        && request.resource.data.age >= 0 && request.resource.data.age <= 130
+        && request.resource.data.lastSeenAt <= request.time && request.resource.data.status == 'Searching';
+      allow update: if admin() || (owned() && request.resource.data.status in ['Found', 'Reunited']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt']));
+      allow delete: if admin();
+    }
+    match /edhi_centers/{id} { allow read: if active(); allow write: if admin(); }
+    match /donations/{id} {
+      allow read: if admin() || owned();
+      allow create: if active() && request.resource.data.userId == request.auth.uid && request.resource.data.status == 'Pending';
+      allow update, delete: if admin();
+    }
+    match /photo_attachments/{id} {
+      allow get: if active() && (resource.data.kind == 'missing_persons'
+        || resource.data.userId == request.auth.uid || admin());
+      allow list: if false;
+      allow create: if active()
+        && request.resource.data.keys().hasOnly(['userId', 'kind', 'contentType', 'image', 'createdAt'])
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.kind in ['missing_persons', 'donations']
+        && request.resource.data.contentType == 'image/png'
+        && request.resource.data.image is bytes
+        && request.resource.data.image.size() > 0
+        && request.resource.data.image.size() <= 256 * 1024
+        && request.resource.data.createdAt == request.time;
+      allow update: if false;
+      allow delete: if active() && (resource.data.userId == request.auth.uid || admin());
+    }
+    match /notifications/{id} {
+      allow read: if active() && (resource.data.userId == request.auth.uid || resource.data.userId == 'all');
+      allow create: if active();
+      allow update: if active() && (resource.data.userId == request.auth.uid || resource.data.userId == 'all')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead']);
+      allow delete: if admin();
+    }
+    match /audit_events/{id} { allow read: if admin(); allow create: if active(); }
+    match /feedback/{id} {
+      allow read: if admin() || owned();
+      allow create: if active() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if admin();
+    }
+    match /chat_messages/{id} { allow read, create: if active(); allow delete: if admin(); }
+    match /tasks/{id} { allow read: if admin() || assigned(); allow write: if admin(); }
+  }
+}

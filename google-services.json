@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "519155114080",
+    "project_id": "eedhi-b08e1",
+    "storage_bucket": "eedhi-b08e1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:519155114080:android:57c05b1661c6db3b862305",
+        "android_client_info": {
+          "package_name": "com.eeedhi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCLbqlwXRgTJ5ManZGdxsjft-hMOY1-GiU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
