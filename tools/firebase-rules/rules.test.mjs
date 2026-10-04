@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, updateDoc, runTransaction, collection, query, where, getDocs, Timestamp, serverTimestamp, Bytes } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, deleteDoc, runTransaction, collection, query, where, getDocs, Timestamp, serverTimestamp, Bytes } from 'firebase/firestore';
 import { ref, uploadBytes, getBytes } from 'firebase/storage';
 
 const env = await initializeTestEnvironment({
@@ -470,6 +470,107 @@ try {
     await assertFails(citizenCompletion());
     assert.equal((await getDoc(doc(citizen, 'employees', 'citizen-unit'))).data().activeRequestId, 'next-job');
     assert.equal((await getDoc(doc(citizen, 'employees', 'citizen-unit'))).data().status, 'busy');
+  });
+  await test('Mission owner and assigned driver commit arrival without admin after five-second dwell', async () => {
+    async function seed(ageMs = 16000, patch = {}) {
+      await env.withSecurityRulesDisabled(async (ctx) => {
+        const seed = ctx.firestore();
+        await setDoc(doc(seed, 'emergency_requests', 'auto-arrival'), {userId: 'citizen', status: 'InProgress', assignedEmployeeId: 'auto-unit'});
+        await setDoc(doc(seed, 'employees', 'auto-unit'), {userId: 'driver', status: 'busy', activeRequestId: 'auto-arrival', currentLat: 34.2, currentLng: 73.2, speedKmh: 30, isSimulated: true});
+        await setDoc(doc(seed, 'route_demos', 'auto-unit'), {requestId: 'auto-arrival', userId: 'citizen', driverUserId: 'driver', enabled: true,
+          points: [{lat: 34.2, lng: 73.2}, {lat: 34.21, lng: 73.24}], startedAt: Timestamp.fromMillis(Date.now() - ageMs),
+          durationSeconds: 10, pausedAt: null, stoppedAt: null, ...patch});
+      });
+    }
+    const arrive = (actor, extra = {}, stop = true) => runTransaction(actor, async (tx) => {
+      tx.update(doc(actor, 'emergency_requests', 'auto-arrival'), {status: 'Arrived', updatedAt: serverTimestamp()});
+      tx.update(doc(actor, 'employees', 'auto-unit'), {currentLat: 34.21, currentLng: 73.24, speedKmh: 0, ...extra});
+      if (stop) tx.update(doc(actor, 'route_demos', 'auto-unit'), {enabled: false, stoppedAt: serverTimestamp()});
+    });
+    await seed(9000);
+    await assertFails(arrive(citizen));
+    await seed(16000, {pausedAt: Timestamp.now()});
+    await assertFails(arrive(citizen));
+    await seed();
+    await assertFails(arrive(other));
+    await assertFails(arrive(citizen, {currentLat: 35}));
+    await assertFails(arrive(citizen, {status: 'available'}));
+    await assertFails(arrive(citizen, {}, false));
+    await assertSucceeds(arrive(citizen));
+    assert.equal((await getDoc(doc(citizen, 'emergency_requests', 'auto-arrival'))).data().status, 'Arrived');
+    assert.equal((await getDoc(doc(citizen, 'employees', 'auto-unit'))).data().status, 'busy');
+    await seed();
+    await assertSucceeds(arrive(driver));
+    await seed(16000, {requestId: 'stale-job'});
+    await assertFails(arrive(citizen));
+  });
+  await test('Only admin can restore emergency access and manage database records', async () => {
+    await env.withSecurityRulesDisabled(ctx => setDoc(doc(ctx.firestore(), 'emergency_usage', 'citizen'), {
+      cancellationCount: 3, windowStartedAt: Timestamp.now(), banStartedAt: Timestamp.now(), lastCancelledRequestId: 'old',
+    }));
+    await assertFails(updateDoc(doc(citizen, 'emergency_usage', 'citizen'), {banStartedAt: null}));
+    await assertSucceeds(updateDoc(doc(admin, 'emergency_usage', 'citizen'), {banStartedAt: null, windowStartedAt: Timestamp.fromMillis(Date.now() - 86400000)}));
+    assert.equal((await getDoc(doc(admin, 'emergency_usage', 'citizen'))).data().cancellationCount, 3);
+    await assertSucceeds(getDocs(collection(admin, 'login_aliases')));
+    await assertSucceeds(getDocs(collection(admin, 'photo_attachments')));
+    await assertFails(getDocs(collection(citizen, 'emergency_usage')));
+    await assertFails(getDocs(collection(admin, 'auth_login_limits')));
+  });
+  await test('Chat histories are private and thread ownership cannot be spoofed', async () => {
+    await assertSucceeds(setDoc(doc(citizen, 'chat_messages', 'private-chat'), {threadId: 'citizen', sender: 'user', message: 'Hello'}));
+    await assertSucceeds(getDocs(query(collection(citizen, 'chat_messages'), where('threadId', '==', 'citizen'))));
+    await assertFails(getDoc(doc(other, 'chat_messages', 'private-chat')));
+    await assertFails(getDocs(collection(citizen, 'chat_messages')));
+    await assertFails(setDoc(doc(other, 'chat_messages', 'spoof-chat'), {threadId: 'citizen', sender: 'bot', message: 'Spoof'}));
+    await assertSucceeds(getDoc(doc(admin, 'chat_messages', 'private-chat')));
+  });
+  await test('Database editor admin can add, inspect, edit and delete each supported application collection', async () => {
+    for (const name of ['users', 'employees', 'edhi_centers', 'emergency_requests', 'emergency_usage',
+      'route_demos', 'driver_links', 'donations', 'blood_donors', 'blood_needs', 'missing_persons',
+      'feedback', 'chat_messages', 'notifications', 'tasks', 'photo_attachments', 'phone_claims', 'login_aliases']) {
+      const ref = doc(admin, name, 'admin-editor-fixture');
+      await assertSucceeds(setDoc(ref, {probe: 1, timestamp: Timestamp.now()}));
+      assert.equal((await assertSucceeds(getDoc(ref))).data().probe, 1);
+      await assertSucceeds(updateDoc(ref, {probe: 2}));
+      assert.equal((await getDoc(ref)).data().probe, 2);
+      await assertSucceeds(deleteDoc(ref));
+    }
+    await assertSucceeds(setDoc(doc(admin, 'audit_events', 'immutable-fixture'), {action: 'test'}));
+    await assertFails(updateDoc(doc(admin, 'audit_events', 'immutable-fixture'), {action: 'altered'}));
+    await assertFails(deleteDoc(doc(admin, 'audit_events', 'immutable-fixture')));
+  });
+  await test('Manual admin ban blocks requests after expiry and cannot be cleared by the user', async () => {
+    await assertSucceeds(setDoc(doc(admin, 'emergency_usage', 'citizen'), {
+      cancellationCount: 3, windowStartedAt: Timestamp.fromMillis(Date.now() - 172800000),
+      banStartedAt: null, adminBanned: true,
+    }));
+    await assertFails(setDoc(doc(citizen, 'emergency_requests', 'manual-ban-job'), {
+      userId: 'citizen', status: 'Pending', assignedEmployeeId: null, createdAt: serverTimestamp(),
+    }));
+    await assertFails(updateDoc(doc(citizen, 'emergency_usage', 'citizen'), {adminBanned: false}));
+    await assertFails(deleteDoc(doc(citizen, 'emergency_usage', 'citizen')));
+    await assertSucceeds(updateDoc(doc(admin, 'emergency_usage', 'citizen'), {adminBanned: false}));
+    await assertSucceeds(setDoc(doc(citizen, 'emergency_requests', 'manual-unban-job'), {
+      userId: 'citizen', status: 'Pending', assignedEmployeeId: null, createdAt: serverTimestamp(),
+    }));
+  });
+  await test('Admin creates profile and aliases together and deletion revokes app access', async () => {
+    const uid = 'admin-created-user';
+    const email = 'account_AbCdEfGhIjKlMnOpQrStWx@citizen.edhi.org';
+    await assertSucceeds(runTransaction(admin, async tx => {
+      tx.set(doc(admin, 'users', uid), {role: 'user', isActive: true, phone: '+923009998877', cnic: '61101-9998877-1', authEmail: email});
+      tx.set(doc(admin, 'phone_claims', '+923009998877'), {userId: uid});
+      tx.set(doc(admin, 'login_aliases', 'phone_+923009998877'), {authEmail: email});
+      tx.set(doc(admin, 'login_aliases', 'cnic_6110199988771'), {authEmail: email});
+    }));
+    const created = env.authenticatedContext(uid, {email}).firestore();
+    await assertSucceeds(getDoc(doc(created, 'users', uid)));
+    await assertSucceeds(setDoc(doc(created, 'donations', 'created-donation'), {userId: uid, status: 'Pending'}));
+    await assertSucceeds(runTransaction(admin, async tx => {
+      for (const [collectionName, id] of [['users', uid], ['phone_claims', '+923009998877'], ['login_aliases', 'phone_+923009998877'], ['login_aliases', 'cnic_6110199988771']]) tx.delete(doc(admin, collectionName, id));
+    }));
+    assert.equal((await getDoc(doc(publicDb, 'login_aliases', 'cnic_6110199988771'))).exists(), false);
+    await assertFails(getDoc(doc(created, 'donations', 'created-donation')));
   });
   console.log(`${passed} Firebase rules tests passed.`);
 } finally { await env.cleanup(); }

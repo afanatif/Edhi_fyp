@@ -10,6 +10,29 @@ service cloud.firestore {
     function assigned() { return driver() && resource.data.assignedEmployeeId != null
       && get(/databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId)).data.userId == request.auth.uid; }
     function validGroup(group) { return group in ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']; }
+    function automaticArrival(id, employeeId) {
+      let routePath = /databases/$(database)/documents/route_demos/$(employeeId);
+      let employeePath = /databases/$(database)/documents/employees/$(employeeId);
+      let jobPath = /databases/$(database)/documents/emergency_requests/$(id);
+      let route = get(routePath).data;
+      let unit = get(employeePath).data;
+      let before = get(jobPath).data;
+      let after = getAfter(jobPath).data;
+      let end = route.points[route.points.size() - 1];
+      return active() && (before.userId == request.auth.uid || unit.userId == request.auth.uid)
+        && before.status in ['Assigned', 'InProgress'] && before.assignedEmployeeId == employeeId
+        && unit.status == 'busy' && unit.activeRequestId == id
+        && route.requestId == id && route.enabled == true && route.pausedAt == null
+        && route.get('stoppedAt', null) == null && route.durationSeconds is number && route.durationSeconds >= 0
+        && request.time >= route.startedAt + duration.value(int(math.ceil(route.durationSeconds * 1000)) + 5000, 'ms')
+        && after.status == 'Arrived' && after.updatedAt == request.time
+        && after.diff(before).affectedKeys().hasOnly(['status', 'updatedAt'])
+        && getAfter(routePath).data.enabled == false && getAfter(routePath).data.stoppedAt == request.time
+        && getAfter(routePath).data.diff(route).affectedKeys().hasOnly(['enabled', 'stoppedAt'])
+        && getAfter(employeePath).data.currentLat == end.lat && getAfter(employeePath).data.currentLng == end.lng
+        && getAfter(employeePath).data.speedKmh == 0
+        && getAfter(employeePath).data.diff(unit).affectedKeys().hasOnly(['currentLat', 'currentLng', 'speedKmh']);
+    }
     function completesResponse(id) {
       let employeePath = /databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId);
       return resource.data.status == 'Arrived' && request.resource.data.status == 'Completed'
@@ -32,8 +55,9 @@ service cloud.firestore {
     }
     function canRequestEmergency(uid) {
       let path = /databases/$(database)/documents/emergency_usage/$(uid);
-      return !exists(path) || get(path).data.banStartedAt == null
-        || request.time >= get(path).data.banStartedAt + duration.value(24, 'h');
+      return !exists(path) || (get(path).data.get('adminBanned', false) == false
+        && (get(path).data.banStartedAt == null
+          || request.time >= get(path).data.banStartedAt + duration.value(24, 'h')));
     }
     function releasesCancelledResponse(employeeId) {
       let path = /databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId);
@@ -78,8 +102,8 @@ service cloud.firestore {
     match /emergency_usage/{uid} {
       allow get: if active() && request.auth.uid == uid || admin();
       allow list: if admin();
-      allow create, update: if validCancellationUsage(uid);
-      allow delete: if false;
+      allow create, update: if admin() || validCancellationUsage(uid);
+      allow delete: if admin();
     }
     match /route_demos/{employeeId} {
       // Private simulated journeys: only admin controls routes and trip stages.
@@ -91,7 +115,7 @@ service cloud.firestore {
             || get(/databases/$(database)/documents/emergency_requests/$(get(/databases/$(database)/documents/employees/$(employeeId)).data.activeRequestId)).data.userId == request.auth.uid))));
       allow list: if admin() || (active() && (resource.data.userId == request.auth.uid || resource.data.driverUserId == request.auth.uid));
       allow create, delete: if admin();
-      allow update: if admin() || (active()
+      allow update: if admin() || automaticArrival(resource.data.requestId, employeeId) || (active()
         && resource.data.enabled == true
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'stoppedAt'])
         && request.resource.data.enabled == false
@@ -150,6 +174,7 @@ service cloud.firestore {
         && request.resource.data.assignedEmployeeId == null
         && request.resource.data.createdAt == request.time;
       allow update: if admin()
+        || automaticArrival(id, resource.data.assignedEmployeeId)
         || (owned() && completesResponse(id))
         || (owned() && resource.data.status in ['Pending', 'Approved', 'Assigned', 'InProgress', 'Arrived']
           && request.resource.data.status == 'Cancelled'
@@ -169,7 +194,8 @@ service cloud.firestore {
     match /employees/{id} {
       allow read: if active();
       allow create, delete: if admin();
-      allow update: if admin() || releasesCompletedResponse(id) || releasesCancelledResponse(id) || (driver() && resource.data.userId == request.auth.uid
+      allow update: if admin() || releasesCompletedResponse(id) || releasesCancelledResponse(id)
+        || automaticArrival(resource.data.activeRequestId, id) || (driver() && resource.data.userId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'currentLat', 'currentLng', 'transitLastHeartbeat', 'transitRunnerSession', 'speedKmh', 'updatedAt', 'locationUpdatedAt'])
         && request.resource.data.status in ['available', 'busy', 'offline']
         && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['locationUpdatedAt', 'currentLat', 'currentLng'])
@@ -214,7 +240,7 @@ service cloud.firestore {
     match /photo_attachments/{id} {
       allow get: if active() && (resource.data.kind == 'missing_persons'
         || resource.data.userId == request.auth.uid || admin());
-      allow list: if false;
+      allow list: if admin();
       allow create: if active()
         && request.resource.data.keys().hasOnly(['userId', 'kind', 'contentType', 'image', 'createdAt'])
         && request.resource.data.userId == request.auth.uid
@@ -224,7 +250,7 @@ service cloud.firestore {
         && request.resource.data.image.size() > 0
         && request.resource.data.image.size() <= 256 * 1024
         && request.resource.data.createdAt == request.time;
-      allow update: if false;
+      allow update: if admin();
       allow delete: if active() && (resource.data.userId == request.auth.uid || admin());
     }
     match /notifications/{id} {
@@ -240,7 +266,21 @@ service cloud.firestore {
       allow create: if active() && request.resource.data.userId == request.auth.uid;
       allow update, delete: if admin();
     }
-    match /chat_messages/{id} { allow read, create: if active(); allow delete: if admin(); }
+    match /chat_messages/{id} {
+      allow read: if admin() || (active() && resource.data.threadId == request.auth.uid);
+      allow create: if admin() || (active() && request.resource.data.threadId == request.auth.uid);
+      allow update, delete: if admin();
+    }
     match /tasks/{id} { allow read: if admin() || assigned(); allow write: if admin(); }
+    // The authenticated admin database editor can manage application records.
+    // Audit events stay append-only; backend authentication rate limits stay private.
+    match /{collection}/{id} {
+      allow read, write: if admin() && collection in [
+        'users', 'employees', 'edhi_centers', 'emergency_requests', 'emergency_usage',
+        'route_demos', 'driver_links', 'donations', 'blood_donors', 'blood_needs',
+        'missing_persons', 'feedback', 'chat_messages', 'notifications', 'tasks',
+        'photo_attachments', 'phone_claims', 'login_aliases'
+      ];
+    }
   }
 }

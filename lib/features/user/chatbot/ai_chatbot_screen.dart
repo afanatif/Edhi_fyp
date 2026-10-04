@@ -5,7 +5,9 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/responsive_shell.dart';
 import '../../../services/firestore_service.dart';
 import '../../../models/chat_message.dart';
+import '../../../services/welfare_knowledge_service.dart';
 import '../../../core/widgets/skeleton_loader.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class AIChatbotScreen extends StatefulWidget {
   const AIChatbotScreen({super.key});
@@ -35,15 +37,25 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
   }
 
   void _sendMessage(String text) async {
-    if (text.trim().isEmpty) return;
+    if (text.trim().isEmpty || _isSending) return;
 
     final firestore = context.read<FirestoreService>();
     _messageController.clear();
     setState(() => _isSending = true);
 
-    await firestore.sendChatMessage(text.trim());
-
-    setState(() => _isSending = false);
+    try {
+      await firestore.sendChatMessage(text.trim());
+    } catch (error) {
+      if (mounted) {
+        _messageController.text = text;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Message could not be saved: $error')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSending = false);
+    }
+    if (!mounted) return;
 
     // Scroll to bottom
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -101,7 +113,7 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                     ),
                     const SizedBox(width: 5),
                     Text(
-                      'Online • Intelligent Triage & Welfare Guide',
+                      'Fast welfare assistance',
                       style: GoogleFonts.inter(
                         fontSize: 11,
                         color: AppColors.textSecondary,
@@ -161,9 +173,9 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                   itemBuilder: (context, index) {
                     final msg = messages[index];
                     final isUser = msg.isUser;
-                    final isEmergency = msg.message.contains(
-                      'EMERGENCY DETECTED',
-                    );
+                    final isEmergency =
+                        msg.isEmergency ||
+                        msg.message.contains('EMERGENCY DETECTED');
 
                     return Align(
                       alignment: isUser
@@ -249,7 +261,11 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                               const SizedBox(height: 8),
                             ],
                             Text(
-                              msg.message,
+                              isUser
+                                  ? msg.message
+                                  : WelfareKnowledgeService.displayText(
+                                      msg.message,
+                                    ),
                               style: GoogleFonts.inter(
                                 color: isUser
                                     ? Colors.white
@@ -261,6 +277,23 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                                     : FontWeight.w400,
                               ),
                             ),
+                            if (!isUser && msg.quickSuggestions.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 6,
+                                children: msg.quickSuggestions
+                                    .map(
+                                      (suggestion) => ActionChip(
+                                        label: Text(suggestion),
+                                        onPressed: _isSending
+                                            ? null
+                                            : () => _sendMessage(suggestion),
+                                      ),
+                                    )
+                                    .toList(),
+                              ),
+                            ],
                             if (isEmergency && !isUser) ...[
                               const SizedBox(height: 14),
                               Row(
@@ -286,17 +319,8 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                                         fontWeight: FontWeight.w800,
                                       ),
                                     ),
-                                    onPressed: () {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        const SnackBar(
-                                          content: Text(
-                                            'Dialing Edhi Emergency 115...',
-                                          ),
-                                        ),
-                                      );
-                                    },
+                                    onPressed: () =>
+                                        launchUrl(Uri.parse('tel:115')),
                                   ),
                                   const SizedBox(width: 8),
                                   OutlinedButton.icon(

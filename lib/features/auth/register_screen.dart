@@ -82,6 +82,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
               auth.errorMessage ?? 'Registration failed. Please retry.',
             ),
             backgroundColor: AppColors.emergencyRed,
+            action: (auth.errorMessage ?? '').contains('already registered')
+                ? SnackBarAction(
+                    label: 'Sign in',
+                    textColor: Colors.white,
+                    onPressed: () => Navigator.pop(context),
+                  )
+                : null,
             duration: const Duration(seconds: 5),
             behavior: SnackBarBehavior.floating,
           ),

@@ -202,6 +202,21 @@ class AuthService extends ChangeNotifier {
       }
       final digits = AppUser.cleanCnic(cnic);
       final normalizedPhone = AppUser.normalizePhone(phone);
+      if (isLiveFirebase) {
+        // Catch duplicates before creating an Auth account.
+        final aliases = await Future.wait([
+          _firestore!.collection('login_aliases').doc('cnic_$digits').get(),
+          _firestore!
+              .collection('login_aliases')
+              .doc('phone_$normalizedPhone')
+              .get(),
+        ]);
+        if (aliases.any((alias) => alias.exists)) {
+          throw StateError(
+            'This CNIC or phone number is already registered. Please sign in instead.',
+          );
+        }
+      }
       // A random Auth identity prevents the public alias from exposing a CNIC,
       // phone number, contact email, UID, role or password.
       final random = Random.secure();
@@ -243,7 +258,9 @@ class AuthService extends ChangeNotifier {
         createdAt: DateTime.now(),
       );
       if (isLiveFirebase) {
-        await _firestore!.runTransaction((transaction) async {
+        final claimed = await _firestore!.runTransaction<bool>((
+          transaction,
+        ) async {
           final claimRef = _firestore!
               .collection('phone_claims')
               .doc(normalizedPhone);
@@ -257,9 +274,9 @@ class AuthService extends ChangeNotifier {
           final cnicAlias = await transaction.get(cnicAliasRef);
           final phoneAlias = await transaction.get(phoneAliasRef);
           if (claim.exists || cnicAlias.exists || phoneAlias.exists) {
-            throw StateError(
-              'This CNIC or phone number is already registered.',
-            );
+            // Throwing a Dart error inside this web SDK callback can lose the
+            // message across the JavaScript Future bridge. Return an outcome.
+            return false;
           }
           transaction.set(claimRef, {'userId': user.id});
           transaction.set(cnicAliasRef, {'authEmail': authEmail});
@@ -268,7 +285,13 @@ class AuthService extends ChangeNotifier {
             _firestore!.collection(AppConstants.usersCollection).doc(user.id),
             {...user.toMap(), 'authEmail': authEmail},
           );
+          return true;
         });
+        if (!claimed) {
+          throw StateError(
+            'This CNIC or phone number is already registered. Please sign in instead.',
+          );
+        }
       } else {
         _offlineUsers.add(user);
         _offlinePasswords[id] = password;

@@ -14,6 +14,8 @@ import '../donations/admin_donations_view.dart';
 import '../blood_bank/admin_blood_bank_view.dart';
 import '../reports/admin_reports_view.dart';
 import '../users/admin_users_view.dart';
+import '../users/admin_cancellation_alert.dart';
+import '../database/admin_database_view.dart';
 import '../fleet/registered_drivers_panel.dart';
 import '../missing_persons/admin_missing_persons_view.dart';
 import '../../../models/employee.dart';
@@ -67,7 +69,9 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           _selectedTabIndex = 4;
           break;
         case 4:
-          if (_selectedTabIndex != 5 && _selectedTabIndex != 6) {
+          if (_selectedTabIndex != 5 &&
+              _selectedTabIndex != 6 &&
+              _selectedTabIndex != 8) {
             _selectedTabIndex = 5;
           }
           break;
@@ -977,19 +981,27 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                     ],
                   ),
                 ],
-                if (_selectedTabIndex == 5 || _selectedTabIndex == 6) ...[
+                if (_selectedTabIndex == 5 ||
+                    _selectedTabIndex == 6 ||
+                    _selectedTabIndex == 8) ...[
                   const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(child: _buildTabButton('Reports', 5)),
                       const SizedBox(width: 8),
                       Expanded(child: _buildTabButton('People', 6)),
+                      const SizedBox(width: 8),
+                      Expanded(child: _buildTabButton('Database', 8)),
                     ],
                   ),
                 ],
 
                 const SizedBox(height: 16),
 
+                if (_selectedTabIndex != 6)
+                  AdminCancellationAlert(
+                    onReview: () => setState(() => _selectedTabIndex = 6),
+                  ),
                 if (_selectedTabIndex == 0)
                   _buildRequestsTable(context, requests)
                 else if (_selectedTabIndex == 1)
@@ -1004,6 +1016,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   const AdminReportsView()
                 else if (_selectedTabIndex == 7)
                   const AdminMissingPersonsView()
+                else if (_selectedTabIndex == 8)
+                  const AdminDatabaseView()
                 else
                   const AdminUsersView(),
               ],

@@ -167,7 +167,7 @@ void main() {
       final waiting = jobs.firstWhere(
         (r) => r!.status == EmergencyStatus.pending,
       )!;
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       final finished = moving.first!;
       await service.updateRequestStatus(
@@ -264,7 +264,7 @@ void main() {
         service.linkDriverAccount(unit().employeeId, ''),
         throwsStateError,
       );
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       await expectLater(
         service.completeDriverResponse(id, 'other-driver'),
@@ -361,7 +361,7 @@ void main() {
         service.completeCitizenResponse(id, 'simulation-citizen'),
         throwsStateError,
       );
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       await expectLater(
         service.completeCitizenResponse(id, 'another-citizen'),
@@ -418,7 +418,7 @@ void main() {
         employeeId: unit().employeeId,
         employeeName: unit().name,
       );
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       final results = await Future.wait([
         service.completeCitizenResponse(activeId, 'simulation-citizen'),
@@ -434,7 +434,7 @@ void main() {
     'Repeating an old confirmation cannot release the next patient’s ambulance',
     () async {
       final id = await dispatch();
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       await service.completeCitizenResponse(id, 'simulation-citizen');
       final next = await service.submitEmergencyRequest(
@@ -628,6 +628,18 @@ void main() {
       await service.reconcileSimulations();
       expect(
         (await service.getRequestStream(id).first)!.status,
+        EmergencyStatus.inProgress,
+      );
+      now = now.add(const Duration(milliseconds: 4999));
+      await service.reconcileSimulations();
+      expect(
+        (await service.getRequestStream(id).first)!.status,
+        EmergencyStatus.inProgress,
+      );
+      now = now.add(const Duration(milliseconds: 1));
+      await service.reconcileSimulations();
+      expect(
+        (await service.getRequestStream(id).first)!.status,
         EmergencyStatus.arrived,
       );
       expect(unit().currentLat, playback.points.last.latitude);
@@ -662,7 +674,7 @@ void main() {
       );
       await service.pauseOrResumeTransit(unit().employeeId);
       expect(LatLng(unit().currentLat, unit().currentLng), before);
-      now = now.add(const Duration(seconds: 9));
+      now = now.add(const Duration(seconds: 14));
       await service.reconcileSimulations();
       expect(
         (await service.getRequestStream(id).first)!.status,
@@ -697,7 +709,7 @@ void main() {
     'Next assignment starts from the endpoint, not the old staging point',
     () async {
       final id = await dispatch();
-      now = now.add(const Duration(seconds: 120));
+      now = now.add(const Duration(seconds: 125));
       await service.reconcileSimulations();
       await service.updateRequestStatus(id, EmergencyStatus.completed);
       final parked = LatLng(unit().currentLat, unit().currentLng);

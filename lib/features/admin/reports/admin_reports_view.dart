@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/app_constants.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../services/firestore_service.dart';
@@ -214,51 +215,53 @@ class AdminReportsView extends StatelessWidget {
                 const SizedBox(height: 20),
 
                 // Metrics Grid
-                GridView.count(
-                  crossAxisCount: 2,
-                  shrinkWrap: true,
-                  physics: const NeverScrollableScrollPhysics(),
-                  crossAxisSpacing: 14,
-                  mainAxisSpacing: 14,
-                  childAspectRatio: 1.65,
-                  children: [
-                    _buildReportStatCard(
-                      'Total Incidents Handled',
-                      '$totalRequests',
-                      Icons.emergency,
-                      AppColors.emergencyRed,
-                    ),
-                    _buildReportStatCard(
-                      'Missions Completed',
-                      '$completed',
-                      Icons.check_circle_outline,
-                      AppColors.reliefGreenMedium,
-                    ),
-                    _buildReportStatCard(
-                      'Critical P1 Lifesaving Events',
-                      '$criticalP1',
-                      Icons.flash_on,
-                      Colors.purple,
-                    ),
-                    _buildReportStatCard(
-                      'Verified Funds Collected',
-                      'PKR ${totalDonations.toStringAsFixed(0)}',
-                      Icons.monetization_on,
-                      Colors.teal,
-                    ),
-                    _buildReportStatCard(
-                      'Average Dispatch Speed',
-                      '1.8 min (Meets NFR-PER-01)',
-                      Icons.timer,
-                      Colors.blue,
-                    ),
-                    _buildReportStatCard(
-                      'Active Blood Donors',
-                      '${firestore.bloodDonorCount}+ Registered',
-                      Icons.bloodtype,
-                      Colors.redAccent,
-                    ),
-                  ],
+                LayoutBuilder(
+                  builder: (context, constraints) => GridView.count(
+                    crossAxisCount: constraints.maxWidth < 650 ? 1 : 2,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 14,
+                    mainAxisSpacing: 14,
+                    mainAxisExtent: 112,
+                    children: [
+                      _buildReportStatCard(
+                        'Total Incidents Handled',
+                        '$totalRequests',
+                        Icons.emergency,
+                        AppColors.emergencyRed,
+                      ),
+                      _buildReportStatCard(
+                        'Missions Completed',
+                        '$completed',
+                        Icons.check_circle_outline,
+                        AppColors.reliefGreenMedium,
+                      ),
+                      _buildReportStatCard(
+                        'Critical P1 Lifesaving Events',
+                        '$criticalP1',
+                        Icons.flash_on,
+                        Colors.purple,
+                      ),
+                      _buildReportStatCard(
+                        'Verified Funds Collected',
+                        'PKR ${totalDonations.toStringAsFixed(0)}',
+                        Icons.monetization_on,
+                        Colors.teal,
+                      ),
+                      _buildReportStatCard(
+                        'Open Emergency Requests',
+                        '${requests.where((r) => ![EmergencyStatus.completed, EmergencyStatus.cancelled].contains(r.status)).length}',
+                        Icons.timer,
+                        Colors.blue,
+                      ),
+                      _buildReportStatCard(
+                        'Active Blood Donors',
+                        '${firestore.bloodDonorCount}+ Registered',
+                        Icons.bloodtype,
+                        Colors.redAccent,
+                      ),
+                    ],
+                  ),
                 ),
 
                 const SizedBox(height: 20),
@@ -522,6 +525,7 @@ class AdminReportsView extends StatelessWidget {
               children: [
                 Text(
                   title,
+                  maxLines: 1,
                   style: const TextStyle(
                     fontSize: 11,
                     color: AppColors.textSecondary,
@@ -531,6 +535,8 @@ class AdminReportsView extends StatelessWidget {
                 const SizedBox(height: 4),
                 Text(
                   value,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
                     fontSize: 17,
                     fontWeight: FontWeight.w800,
@@ -556,8 +562,10 @@ class AdminReportsView extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        Wrap(
+          spacing: 12,
+          runSpacing: 4,
+          crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             Text(
               category,

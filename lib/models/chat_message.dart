@@ -6,6 +6,9 @@ class ChatMessage {
   final String sender; // 'user', 'bot', 'admin'
   final String message;
   final DateTime? timestamp;
+  final bool isEmergency;
+  final List<String> quickSuggestions;
+  final List<String> sourceUrls;
 
   const ChatMessage({
     required this.messageId,
@@ -13,6 +16,9 @@ class ChatMessage {
     required this.sender,
     required this.message,
     this.timestamp,
+    this.isEmergency = false,
+    this.quickSuggestions = const [],
+    this.sourceUrls = const [],
   });
 
   bool get isUser => sender == 'user';
@@ -31,6 +37,13 @@ class ChatMessage {
       sender: map['sender'] ?? 'user',
       message: map['message'] ?? '',
       timestamp: parseDate(map['timestamp']),
+      isEmergency: map['isEmergency'] == true,
+      quickSuggestions: (map['quickSuggestions'] as List? ?? [])
+          .whereType<String>()
+          .toList(),
+      sourceUrls: (map['sourceUrls'] as List? ?? [])
+          .whereType<String>()
+          .toList(),
     );
   }
 
@@ -46,6 +59,9 @@ class ChatMessage {
       'threadId': threadId,
       'sender': sender,
       'message': message,
+      'isEmergency': isEmergency,
+      'quickSuggestions': quickSuggestions,
+      'sourceUrls': sourceUrls,
       'timestamp': timestamp != null
           ? Timestamp.fromDate(timestamp!)
           : FieldValue.serverTimestamp(),

@@ -1,5 +1,7 @@
 # Retained authentication service
 
+This directory also contains the optional arrival scheduler and task worker. They use Cloud Tasks to commit arrival five seconds after travel ends, including when every client is closed. Deployment and limitations are described in [arrival and administration updates](../docs/ARRIVAL_ADMIN_AND_CHATBOT_UPDATES.md). The separate [Functions configuration](../firebase.functions.json) keeps ordinary app deployments on their current workflow.
+
 This directory contains an independently tested server authentication implementation. The current Flutter app signs in through **Firestore identifier aliases plus Firebase password authentication**.
 
 ## Current client workflow

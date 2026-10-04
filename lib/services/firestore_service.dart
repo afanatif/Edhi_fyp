@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:math';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'photo_codec.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import '../models/emergency_request.dart';
 import '../models/emergency_usage.dart';
 import '../models/route_playback.dart';
@@ -24,6 +26,7 @@ import '../firebase_options.dart';
 import 'package:latlong2/latlong.dart';
 import 'notification_service.dart';
 import 'ai_triage_service.dart';
+import 'welfare_knowledge_service.dart';
 import 'location_service.dart';
 import 'route_service.dart';
 
@@ -248,7 +251,9 @@ class FirestoreService extends ChangeNotifier {
     for (final id in _liveLocationSubscriptions.keys.toList()) {
       stopLiveDriverLocation(id);
     }
-    if (userId != null) _listenToLiveStreams();
+    if (userId != null) {
+      _listenToLiveStreams();
+    }
     scheduleMicrotask(() {
       if (!_employeesController.isClosed) {
         _employeesController.add(getAllEmployees());
@@ -294,7 +299,9 @@ class FirestoreService extends ChangeNotifier {
   }
 
   void _listenToLiveStreams() {
-    if (_firestore == null) return;
+    if (_firestore == null) {
+      return;
+    }
     _demoSub?.cancel();
     Query<Map<String, dynamic>> demoQuery = _firestore!.collection(
       'route_demos',
@@ -325,7 +332,9 @@ class FirestoreService extends ChangeNotifier {
       onError: (Object error) {
         _simulationSyncError =
             'Road journeys could not load. Check connection and deploy the included Firebase rules.';
-        if (!_disposed) notifyListeners();
+        if (!_disposed) {
+          notifyListeners();
+        }
         debugPrint('Simulation route access: $error');
       },
     );
@@ -414,7 +423,9 @@ class FirestoreService extends ChangeNotifier {
 
   /// Purges sample/mock documents from Firestore
   Future<void> purgeMockDataFromFirestore() async {
-    if (_firestore == null) return;
+    if (_firestore == null) {
+      return;
+    }
     try {
       final mockRequestIds = ['REQ-101', 'REQ-102'];
       for (final id in mockRequestIds) {
@@ -478,7 +489,9 @@ class FirestoreService extends ChangeNotifier {
 
   /// Completely wipes all data across all collections in Firestore
   Future<void> wipeAllDataFromFirestore() async {
-    if (_firestore == null) return;
+    if (_firestore == null) {
+      return;
+    }
     final collections = [
       AppConstants.requestsCollection,
       AppConstants.employeesCollection,
@@ -899,7 +912,9 @@ class FirestoreService extends ChangeNotifier {
   }
 
   void _broadcastAll() {
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
     _requestsController.add(List.unmodifiable(_mockRequests));
     _donationsController.add(List.unmodifiable(_mockDonations));
     _donorsController.add(List.unmodifiable(_mockBloodDonors));
@@ -1054,7 +1069,9 @@ class FirestoreService extends ChangeNotifier {
         )
         .toList();
 
-    if (available.isEmpty) return null;
+    if (available.isEmpty) {
+      return null;
+    }
 
     Employee? bestDriver;
     double minDistance = double.infinity;
@@ -1072,7 +1089,9 @@ class FirestoreService extends ChangeNotifier {
       }
     }
 
-    if (bestDriver == null) return null;
+    if (bestDriver == null) {
+      return null;
+    }
     final eta = LocationService.calculateEtaMinutes(
       minDistance,
       averageSpeedKmH: 45,
@@ -1100,9 +1119,13 @@ class FirestoreService extends ChangeNotifier {
       final reqIndex = _mockRequests.indexWhere(
         (r) => r.requestId == requestId,
       );
-      if (reqIndex != -1) req = _mockRequests[reqIndex];
+      if (reqIndex != -1) {
+        req = _mockRequests[reqIndex];
+      }
     }
-    if (req == null) return null;
+    if (req == null) {
+      return null;
+    }
     if (!req.location.hasValidCoordinates) {
       throw StateError('Confirm the patient location before dispatch.');
     }
@@ -1252,7 +1275,9 @@ class FirestoreService extends ChangeNotifier {
     final usage = await getEmergencyUsage(request.userId);
     if (usage.isBanned(_now())) {
       throw StateError(
-        'Emergency requests blocked until ${usage.bannedUntil!.toLocal()} after three cancellations. Call Edhi 115 for urgent help.',
+        usage.adminBanned
+            ? 'Emergency requests blocked by Operations. Contact Operations to restore access, or call Edhi 115 for urgent help.'
+            : 'Emergency requests blocked until ${usage.bannedUntil!.toLocal()} after three cancellations. Call Edhi 115 for urgent help.',
       );
     }
     if (request.userId.isEmpty || !request.location.hasValidCoordinates) {
@@ -1383,7 +1408,9 @@ class FirestoreService extends ChangeNotifier {
   }
 
   Future<int> retryPendingEmergencyWrites() async {
-    if (!isLiveFirebase || _pendingEmergencyWrites.isEmpty) return 0;
+    if (!isLiveFirebase || _pendingEmergencyWrites.isEmpty) {
+      return 0;
+    }
     var synced = 0;
     for (final entry in List.of(_pendingEmergencyWrites.entries)) {
       try {
@@ -1414,7 +1441,9 @@ class FirestoreService extends ChangeNotifier {
   }
 
   Future<EmergencyUsage> getEmergencyUsage(String userId) async {
-    if (!isLiveFirebase) return _mockUsage[userId] ?? const EmergencyUsage();
+    if (!isLiveFirebase) {
+      return _mockUsage[userId] ?? const EmergencyUsage();
+    }
     final doc = await _firestore!
         .collection('emergency_usage')
         .doc(userId)
@@ -1471,7 +1500,9 @@ class FirestoreService extends ChangeNotifier {
       await _firestore!.runTransaction((tx) async {
         final doc = await tx.get(ref);
         final usageDoc = await tx.get(usageRef);
-        if (!doc.exists) throw StateError('Request no longer exists.');
+        if (!doc.exists) {
+          throw StateError('Request no longer exists.');
+        }
         final request = EmergencyRequest.fromFirestore(doc);
         final usage = EmergencyUsage.fromMap(usageDoc.data() ?? {});
         final now = _now();
@@ -1523,7 +1554,9 @@ class FirestoreService extends ChangeNotifier {
       });
     } else {
       final index = _mockRequests.indexWhere((r) => r.requestId == requestId);
-      if (index < 0) throw StateError('Request no longer exists.');
+      if (index < 0) {
+        throw StateError('Request no longer exists.');
+      }
       final request = _mockRequests[index];
       final usage = _mockUsage[userId] ?? const EmergencyUsage();
       final now = _now();
@@ -1577,7 +1610,9 @@ class FirestoreService extends ChangeNotifier {
           .doc(requestId);
       await _firestore!.runTransaction((transaction) async {
         final doc = await transaction.get(ref);
-        if (!doc.exists) throw StateError('Request no longer exists.');
+        if (!doc.exists) {
+          throw StateError('Request no longer exists.');
+        }
         final request = EmergencyRequest.fromFirestore(doc);
         validate(request.status);
         assignedEmployeeId = request.assignedEmployeeId;
@@ -1639,7 +1674,9 @@ class FirestoreService extends ChangeNotifier {
       });
     } else {
       final index = _mockRequests.indexWhere((r) => r.requestId == requestId);
-      if (index < 0) throw StateError('Request no longer exists.');
+      if (index < 0) {
+        throw StateError('Request no longer exists.');
+      }
       final request = _mockRequests[index];
       validate(request.status);
       if (completingDriverUserId != null &&
@@ -2036,7 +2073,9 @@ class FirestoreService extends ChangeNotifier {
 
   void _ensureDemoTicker() {
     _demoTicker ??= Timer.periodic(const Duration(seconds: 1), (_) {
-      if (_disposed || _employeesController.isClosed) return;
+      if (_disposed || _employeesController.isClosed) {
+        return;
+      }
       if (_routeDemos.values.any((route) => route.enabled)) {
         _employeesController.add(getAllEmployees());
         notifyListeners();
@@ -2045,22 +2084,20 @@ class FirestoreService extends ChangeNotifier {
     });
   }
 
-  /// Admin commits stages; every viewer renders time-based progress independently.
-  /// Closing the admin tab does not freeze playback. Stages reconcile on reopening.
+  /// Any authorized mission viewer can commit arrival after the five-second dwell.
   Future<void> reconcileSimulations() async {
     if (_disposed ||
         (isLiveFirebase && !_routesLoaded) ||
-        !automaticSimulation ||
-        (isLiveFirebase && _sessionRole != AppRoles.admin)) {
+        !automaticSimulation) {
       return;
     }
-    await _repairLegacyAssignmentLinks();
-    await dispatchQueuedRequests();
+    if (!isLiveFirebase || _sessionRole == AppRoles.admin) {
+      await _repairLegacyAssignmentLinks();
+      await dispatchQueuedRequests();
+    }
     for (final entry in _routeDemos.entries.toList()) {
       final route = entry.value;
-      if (!route.enabled ||
-          route.pausedAt != null ||
-          route.progressAt(_now()) < 1 ||
+      if (!route.arrivalReadyAt(_now()) ||
           !_finishingSimulations.add(entry.key)) {
         continue;
       }
@@ -2074,6 +2111,9 @@ class FirestoreService extends ChangeNotifier {
       } finally {
         _finishingSimulations.remove(entry.key);
       }
+    }
+    if (isLiveFirebase && _sessionRole != AppRoles.admin) {
+      return;
     }
     // Resume older active assignments which did not yet have a saved road journey.
     final jobs = isLiveFirebase
@@ -2111,7 +2151,9 @@ class FirestoreService extends ChangeNotifier {
           speedFactor: _simulationSpeed,
           callerRole: AppRoles.admin,
         ).catchError((Object error) {
-          if (_disposed) return;
+          if (_disposed) {
+            return;
+          }
           _simulationErrors[id] = 'Route unavailable: $error';
           notifyListeners();
         }),
@@ -2123,7 +2165,9 @@ class FirestoreService extends ChangeNotifier {
   // unit's one active job; never guess between multiple patients or overwrite
   // a new reservation. This also lets arrived legacy jobs be released safely.
   Future<void> _repairLegacyAssignmentLinks() async {
-    if (_repairingAssignmentLinks) return;
+    if (_repairingAssignmentLinks) {
+      return;
+    }
     _repairingAssignmentLinks = true;
     try {
       final jobs = isLiveFirebase ? _simulationRequests.values : _mockRequests;
@@ -2191,7 +2235,9 @@ class FirestoreService extends ChangeNotifier {
     String requestId,
   ) async {
     final route = _routeDemos[employeeId];
-    if (route == null || route.points.isEmpty) return;
+    if (route == null || route.points.isEmpty) {
+      return;
+    }
     if (isLiveFirebase) {
       final requestRef = _firestore!
           .collection(AppConstants.requestsCollection)
@@ -2204,12 +2250,12 @@ class FirestoreService extends ChangeNotifier {
         final request = await tx.get(requestRef);
         final employee = await tx.get(employeeRef);
         final saved = await tx.get(routeRef);
-        if (!saved.exists || !employee.exists || !request.exists) return;
+        if (!saved.exists || !employee.exists || !request.exists) {
+          return;
+        }
         final fresh = RoutePlayback.fromMap(saved.data()!);
         if (fresh.requestId != requestId ||
-            !fresh.enabled ||
-            fresh.pausedAt != null ||
-            fresh.progressAt(_now()) < 1 ||
+            !fresh.arrivalReadyAt(_now()) ||
             fresh.points.isEmpty ||
             employee.data()?['activeRequestId'] != requestId ||
             request.data()?['assignedEmployeeId'] != employeeId ||
@@ -2227,7 +2273,6 @@ class FirestoreService extends ChangeNotifier {
           'currentLat': fresh.points.last.latitude,
           'currentLng': fresh.points.last.longitude,
           'speedKmh': 0,
-          'isSimulated': true,
         });
         tx.update(routeRef, {
           'enabled': false,
@@ -2244,7 +2289,9 @@ class FirestoreService extends ChangeNotifier {
               EmergencyStatus.inProgress,
             ].contains(r.status),
       );
-      if (index < 0) return;
+      if (index < 0) {
+        return;
+      }
       _mockRequests[index] = _mockRequests[index].copyWith(
         status: EmergencyStatus.arrived,
         updatedAt: _now(),
@@ -2318,7 +2365,9 @@ class FirestoreService extends ChangeNotifier {
       final ref = _firestore!.collection('route_demos').doc(employeeId);
       await _firestore!.runTransaction((tx) async {
         final saved = await tx.get(ref);
-        if (!saved.exists) throw StateError('No saved journey.');
+        if (!saved.exists) {
+          throw StateError('No saved journey.');
+        }
         final route = RoutePlayback.fromMap(saved.data()!);
         final request = await tx.get(
           _firestore!
@@ -2367,7 +2416,9 @@ class FirestoreService extends ChangeNotifier {
         (callerRole != AppRoles.admin || _sessionRole != AppRoles.admin)) {
       throw StateError('Only admin can start a road journey.');
     }
-    if (!_pendingTransitStarts.add(employeeId)) return;
+    if (!_pendingTransitStarts.add(employeeId)) {
+      return;
+    }
     try {
       final employee = getAllEmployees()
           .where((e) => e.employeeId == employeeId)
@@ -2398,7 +2449,9 @@ class FirestoreService extends ChangeNotifier {
         LatLng(employee.currentLat, employee.currentLng),
         LatLng(request.location.latitude, request.location.longitude),
       );
-      if (_disposed || !_pendingTransitStarts.contains(employeeId)) return;
+      if (_disposed || !_pendingTransitStarts.contains(employeeId)) {
+        return;
+      }
       final playback = RoutePlayback(
         requestId: requestId,
         points: _boundedRoutePoints(route.points),
@@ -2496,7 +2549,9 @@ class FirestoreService extends ChangeNotifier {
           .update(update)
           .timeout(const Duration(seconds: 10));
     }
-    if (_disposed) return;
+    if (_disposed) {
+      return;
+    }
 
     final idx = _mockEmployees.indexWhere((e) => e.employeeId == employeeId);
     if (idx != -1) {
@@ -2565,12 +2620,16 @@ class FirestoreService extends ChangeNotifier {
         speedKmh: speed,
         recordHeartbeat: true,
       );
-      if (_disposed || !_liveLocationSubscriptions.containsKey(id)) return;
+      if (_disposed || !_liveLocationSubscriptions.containsKey(id)) {
+        return;
+      }
       _lastGpsPoints[id] = (point, now);
       _driverLocationErrors.remove(id);
       notifyListeners();
     } catch (error) {
-      if (_disposed || !_liveLocationSubscriptions.containsKey(id)) return;
+      if (_disposed || !_liveLocationSubscriptions.containsKey(id)) {
+        return;
+      }
       _driverLocationErrors[id] =
           'GPS could not sync. Check your connection and driver permissions, then retry. No live update was confirmed.';
       notifyListeners();
@@ -2583,7 +2642,9 @@ class FirestoreService extends ChangeNotifier {
   /// Tracks the on-duty session, including the dashboard. Web tracking requires
   /// an open foreground tab; mobile background tracking needs a native service.
   void startLiveDriverLocation(String employeeId) {
-    if (simulatedFleetEnabled) return;
+    if (simulatedFleetEnabled) {
+      return;
+    }
     if (!isLiveFirebase ||
         employeeId.isEmpty ||
         _liveLocationSubscriptions.containsKey(employeeId)) {
@@ -2602,7 +2663,9 @@ class FirestoreService extends ChangeNotifier {
         LocationService.watchCurrentLocation().listen(
           (point) => unawaited(_publishDriverPoint(employeeId, point)),
           onError: (Object error) {
-            if (_disposed) return;
+            if (_disposed) {
+              return;
+            }
             stopLiveDriverLocation(employeeId);
             _driverLocationErrors[employeeId] =
                 'GPS unavailable. Enable device location and browser/app location permission, then retry.';
@@ -2614,7 +2677,9 @@ class FirestoreService extends ChangeNotifier {
     _gpsPollers[employeeId] = Timer.periodic(const Duration(seconds: 20), (
       _,
     ) async {
-      if (_gpsWrites.contains(employeeId)) return;
+      if (_gpsWrites.contains(employeeId)) {
+        return;
+      }
       try {
         final point = await LocationService.getCurrentLocation(
           allowFallback: false,
@@ -2745,7 +2810,9 @@ class FirestoreService extends ChangeNotifier {
       createdAt: DateTime.now(),
     );
     _auditEvents.insert(0, event);
-    if (_auditEvents.length > 250) _auditEvents.removeLast();
+    if (_auditEvents.length > 250) {
+      _auditEvents.removeLast();
+    }
     _auditController.add(List.unmodifiable(_auditEvents));
     if (isLiveFirebase) {
       try {
@@ -2781,8 +2848,12 @@ class FirestoreService extends ChangeNotifier {
     final nowMs = DateTime.now().millisecondsSinceEpoch;
     final employees = getAllEmployees();
     final stale = employees.where((employee) {
-      if (simulatedFleetEnabled || employee.isSimulated) return false;
-      if (employee.status == 'offline') return true;
+      if (simulatedFleetEnabled || employee.isSimulated) {
+        return false;
+      }
+      if (employee.status == 'offline') {
+        return true;
+      }
       final heartbeat = employee.transitLastHeartbeat;
       return heartbeat != null && nowMs - heartbeat > 30000;
     }).length;
@@ -2802,7 +2873,9 @@ class FirestoreService extends ChangeNotifier {
   Stream<List<Donation>> getDonationsStream({String? userId}) async* {
     if (isLiveFirebase) {
       Query<Map<String, dynamic>> query = _firestore!.collection('donations');
-      if (userId != null) query = query.where('userId', isEqualTo: userId);
+      if (userId != null) {
+        query = query.where('userId', isEqualTo: userId);
+      }
       yield* query.snapshots().map(
         (snapshot) =>
             snapshot.docs.map((doc) => Donation.fromFirestore(doc)).toList(),
@@ -3011,7 +3084,9 @@ class FirestoreService extends ChangeNotifier {
           .where('userId', isEqualTo: donor.userId)
           .limit(1)
           .get();
-      if (existing.docs.isNotEmpty) existingDonorId = existing.docs.first.id;
+      if (existing.docs.isNotEmpty) {
+        existingDonorId = existing.docs.first.id;
+      }
     } else {
       existingDonorId = _mockBloodDonors
           .where(
@@ -3136,7 +3211,9 @@ class FirestoreService extends ChangeNotifier {
   }
 
   Future<void> cancelUrgentBloodNeed(String id, String userId) async {
-    if (userId.isEmpty) throw StateError('Please sign in.');
+    if (userId.isEmpty) {
+      throw StateError('Please sign in.');
+    }
     if (isLiveFirebase) {
       final ref = _firestore!
           .collection(AppConstants.bloodNeedsCollection)
@@ -3162,12 +3239,15 @@ class FirestoreService extends ChangeNotifier {
   }
 
   // ================= AI Chatbot =================
+  final Map<String, List<String>> _chatHistory = {};
+  String get _chatThreadId => _sessionUserId ?? 'local_demo';
 
   Stream<List<ChatMessage>> getChatStream() async* {
     if (isLiveFirebase) {
+      final threadId = _chatThreadId;
       yield* _firestore!
           .collection(AppConstants.chatMessagesCollection)
-          .where('threadId', isEqualTo: 'thread_default')
+          .where('threadId', isEqualTo: threadId)
           .snapshots()
           .map((snapshot) {
             final messages = snapshot.docs
@@ -3179,6 +3259,15 @@ class FirestoreService extends ChangeNotifier {
                     b.timestamp ?? DateTime.fromMillisecondsSinceEpoch(0),
                   ),
             );
+            _chatHistory[threadId] = messages
+                .where((m) => m.sender == 'user')
+                .map((m) => m.message)
+                .toList()
+                .reversed
+                .take(8)
+                .toList()
+                .reversed
+                .toList();
             return messages;
           });
       return;
@@ -3189,47 +3278,82 @@ class FirestoreService extends ChangeNotifier {
 
   Future<void> sendChatMessage(String messageText) async {
     final cleanText = messageText.trim();
-    if (cleanText.isEmpty) return;
+    if (cleanText.isEmpty) {
+      return;
+    }
+    if (cleanText.length > 2000) {
+      throw ArgumentError('Please keep messages under 2,000 characters.');
+    }
+    final threadId = _chatThreadId;
+    await WelfareKnowledgeService.initialize();
+    final history = _chatHistory[threadId] ?? [];
+    List<BloodDonor>? donors;
+    if (WelfareKnowledgeService.hasBloodIntent(cleanText, history: history)) {
+      if (isLiveFirebase) {
+        try {
+          Query<Map<String, dynamic>> query = _firestore!.collection(
+            'blood_donors',
+          );
+          final group = WelfareKnowledgeService.bloodGroupFor(
+            cleanText,
+            history: history,
+          );
+          if (group != null) {
+            query = query.where('bloodGroup', isEqualTo: group);
+          }
+          final result = await query
+              .limit(50)
+              .get()
+              .timeout(const Duration(seconds: 2));
+          donors = result.docs.map(BloodDonor.fromFirestore).toList();
+        } catch (_) {
+          /* Keep the direct workflow answer when lookup is unavailable. */
+        }
+      } else {
+        donors = List.of(_mockBloodDonors);
+      }
+    }
+    final botReply = WelfareKnowledgeService.answer(
+      cleanText,
+      history: history,
+      donors: donors,
+    );
 
     final userMsg = ChatMessage(
       messageId: _newRecordId('MSG'),
-      threadId: 'thread_default',
+      threadId: threadId,
       sender: 'user',
       message: cleanText,
       timestamp: DateTime.now(),
     );
 
-    if (isLiveFirebase) {
-      await _firestore!
-          .collection(AppConstants.chatMessagesCollection)
-          .doc(userMsg.messageId)
-          .set(userMsg.toMap());
-    } else {
-      _mockChatMessages.add(userMsg);
-      _broadcastAll();
-    }
-
-    // AI Response generation
-    await Future.delayed(const Duration(milliseconds: 500));
-    final botReply = AITriageService.getChatbotResponse(cleanText);
-
     final botMsg = ChatMessage(
       messageId: _newRecordId('MSG'),
-      threadId: 'thread_default',
+      threadId: threadId,
       sender: 'bot',
       message: botReply.text,
+      isEmergency: botReply.isEmergencyIntent,
+      quickSuggestions: botReply.quickSuggestions,
+      sourceUrls: botReply.sourceUrls,
       timestamp: DateTime.now(),
     );
 
     if (isLiveFirebase) {
-      await _firestore!
-          .collection(AppConstants.chatMessagesCollection)
-          .doc(botMsg.messageId)
-          .set(botMsg.toMap());
+      final batch = _firestore!.batch();
+      final collection = _firestore!.collection(
+        AppConstants.chatMessagesCollection,
+      );
+      batch.set(collection.doc(userMsg.messageId), userMsg.toMap());
+      batch.set(collection.doc(botMsg.messageId), botMsg.toMap());
+      await batch.commit();
     } else {
-      _mockChatMessages.add(botMsg);
+      _mockChatMessages.addAll([userMsg, botMsg]);
       _broadcastAll();
     }
+    _chatHistory[threadId] = [
+      ...history,
+      cleanText,
+    ].reversed.take(8).toList().reversed.toList();
   }
 
   // ================= Feedback =================
@@ -3296,7 +3420,9 @@ class FirestoreService extends ChangeNotifier {
     required bool citizen,
   }) async {
     String check(EmergencyRequest? request, Employee? employee) {
-      if (request == null) return 'Request no longer exists.';
+      if (request == null) {
+        return 'Request no longer exists.';
+      }
       if (citizen ? request.userId != actorId : employee?.userId != actorId) {
         return 'You cannot complete another person’s response.';
       }
@@ -3322,7 +3448,9 @@ class FirestoreService extends ChangeNotifier {
           .doc(requestId);
       outcome = await _firestore!.runTransaction<String>((tx) async {
         final saved = await tx.get(requestRef);
-        if (!saved.exists) return 'Request no longer exists.';
+        if (!saved.exists) {
+          return 'Request no longer exists.';
+        }
         final request = EmergencyRequest.fromFirestore(saved);
         final employeeRef = request.assignedEmployeeId == null
             ? null
@@ -3336,7 +3464,9 @@ class FirestoreService extends ChangeNotifier {
             ? Employee.fromFirestore(employeeDoc!)
             : null;
         final result = check(request, employee);
-        if (result != 'ok') return result;
+        if (result != 'ok') {
+          return result;
+        }
         recipientId = request.userId;
         final routeRef = _firestore!
             .collection('route_demos')
@@ -3400,8 +3530,12 @@ class FirestoreService extends ChangeNotifier {
         _broadcastAll();
       }
     }
-    if (outcome == 'already_completed') return false;
-    if (outcome != 'ok') throw StateError(outcome);
+    if (outcome == 'already_completed') {
+      return false;
+    }
+    if (outcome != 'ok') {
+      throw StateError(outcome);
+    }
     _notificationService?.sendNotification(
       userId: recipientId,
       title: 'Response completed',
@@ -3445,7 +3579,9 @@ class FirestoreService extends ChangeNotifier {
           .doc(employeeId);
       await _firestore!.runTransaction((tx) async {
         final employee = await tx.get(ref);
-        if (!employee.exists) throw StateError('Ambulance no longer exists.');
+        if (!employee.exists) {
+          throw StateError('Ambulance no longer exists.');
+        }
         final oldUid = employee.data()?['userId'] as String? ?? '';
         final newClaimRef = uid.isEmpty
             ? null
@@ -3498,7 +3634,9 @@ class FirestoreService extends ChangeNotifier {
       final index = _mockEmployees.indexWhere(
         (e) => e.employeeId == employeeId,
       );
-      if (index < 0) throw StateError('Ambulance no longer exists.');
+      if (index < 0) {
+        throw StateError('Ambulance no longer exists.');
+      }
       if (_mockEmployees[index].status == 'busy') {
         throw StateError(
           'Complete the active response before changing its driver.',
@@ -3550,7 +3688,9 @@ class FirestoreService extends ChangeNotifier {
     Employee employee,
     Iterable<EmergencyRequest> requests,
   ) {
-    if (employee.status != 'busy') return null;
+    if (employee.status != 'busy') {
+      return null;
+    }
     final jobs = requests
         .where(
           (r) =>
@@ -3565,10 +3705,14 @@ class FirestoreService extends ChangeNotifier {
     final bound = jobs
         .where((r) => r.requestId == employee.activeRequestId)
         .firstOrNull;
-    if (employee.activeRequestId.isNotEmpty) return bound;
+    if (employee.activeRequestId.isNotEmpty) {
+      return bound;
+    }
     final routeId = _routeDemos[employee.employeeId]?.requestId;
     final routed = jobs.where((r) => r.requestId == routeId).firstOrNull;
-    if (routed != null) return routed;
+    if (routed != null) {
+      return routed;
+    }
     return jobs.length == 1 ? jobs.single : null;
   }
 
@@ -3606,7 +3750,9 @@ class FirestoreService extends ChangeNotifier {
           .doc(employeeId);
       await _firestore!.runTransaction((tx) async {
         final current = await tx.get(ref);
-        if (!current.exists) throw StateError('Ambulance no longer exists.');
+        if (!current.exists) {
+          throw StateError('Ambulance no longer exists.');
+        }
         if (current.data()?['status'] == 'busy') {
           throw StateError(
             'Complete the active response before changing availability.',
@@ -3616,7 +3762,9 @@ class FirestoreService extends ChangeNotifier {
       });
     } else {
       final idx = _mockEmployees.indexWhere((e) => e.employeeId == employeeId);
-      if (idx < 0) throw StateError('Ambulance no longer exists.');
+      if (idx < 0) {
+        throw StateError('Ambulance no longer exists.');
+      }
       if (_mockEmployees[idx].status == 'busy') {
         throw StateError(
           'Complete the active response before changing availability.',
@@ -3838,7 +3986,9 @@ class FirestoreService extends ChangeNotifier {
       await _firestore!.runTransaction((tx) async {
         final employee = await tx.get(ref);
         final route = await tx.get(routeRef);
-        if (!employee.exists) return;
+        if (!employee.exists) {
+          return;
+        }
         final uid = employee.data()?['userId'] as String? ?? '';
         final claimRef = uid.isEmpty
             ? null
@@ -3850,8 +4000,12 @@ class FirestoreService extends ChangeNotifier {
           );
         }
         tx.delete(ref);
-        if (route.exists) tx.delete(routeRef);
-        if (claim?.data()?['employeeId'] == employeeId) tx.delete(claimRef!);
+        if (route.exists) {
+          tx.delete(routeRef);
+        }
+        if (claim?.data()?['employeeId'] == employeeId) {
+          tx.delete(claimRef!);
+        }
       });
     } else {
       if (_mockEmployees.any(
@@ -3938,6 +4092,664 @@ class FirestoreService extends ChangeNotifier {
 
   // ================= User & Driver Management =================
 
+  Stream<Map<String, EmergencyUsage>> watchAllEmergencyUsage() async* {
+    if (isLiveFirebase) {
+      yield* _firestore!
+          .collection('emergency_usage')
+          .snapshots()
+          .map(
+            (snap) => {
+              for (final doc in snap.docs)
+                doc.id: EmergencyUsage.fromMap(doc.data()),
+            },
+          );
+    } else {
+      yield Map.unmodifiable(_mockUsage);
+      yield* _usersController.stream.map(
+        (_) => Map<String, EmergencyUsage>.unmodifiable(_mockUsage),
+      );
+    }
+  }
+
+  void _requireAdmin() {
+    if (isLiveFirebase && _sessionRole != AppRoles.admin) {
+      throw StateError('Administrator access is required.');
+    }
+  }
+
+  Future<void> unbanEmergencyUser(String userId) async {
+    _requireAdmin();
+    if (isLiveFirebase) {
+      // Keep history for the review highlight, but restart the counting window.
+      await _firestore!.collection('emergency_usage').doc(userId).set({
+        'banStartedAt': null,
+        'adminBanned': false,
+        'windowStartedAt': Timestamp.fromDate(
+          _now().subtract(EmergencyUsage.countingWindow),
+        ),
+      }, SetOptions(merge: true));
+    } else {
+      final old = _mockUsage[userId] ?? const EmergencyUsage();
+      _mockUsage[userId] = EmergencyUsage(
+        cancellationCount: old.cancellationCount,
+        windowStartedAt: _now().subtract(EmergencyUsage.countingWindow),
+      );
+      _broadcastAll();
+    }
+    await _logAudit(
+      action: 'emergency_ban_lifted',
+      entityType: 'user',
+      entityId: userId,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Administrator restored emergency request access.',
+    );
+  }
+
+  Future<void> banEmergencyUser(String userId) async {
+    _requireAdmin();
+    if (userId == _sessionUserId) {
+      throw StateError('You cannot ban your own administrator account.');
+    }
+    if (isLiveFirebase) {
+      await _firestore!.runTransaction((tx) async {
+        final profile = await tx.get(
+          _firestore!.collection('users').doc(userId),
+        );
+        final ref = _firestore!.collection('emergency_usage').doc(userId);
+        final usage = await tx.get(ref);
+        if (!profile.exists) throw StateError('User no longer exists.');
+        tx.set(ref, {
+          if (!usage.exists) ...{
+            'cancellationCount': 0,
+            'windowStartedAt': FieldValue.serverTimestamp(),
+            'banStartedAt': null,
+          },
+          'adminBanned': true,
+        }, SetOptions(merge: true));
+      });
+    } else {
+      if (!_mockUsers.any((u) => u.id == userId)) {
+        throw StateError('User no longer exists.');
+      }
+      final old = _mockUsage[userId] ?? const EmergencyUsage();
+      _mockUsage[userId] = EmergencyUsage(
+        cancellationCount: old.cancellationCount,
+        windowStartedAt: old.windowStartedAt,
+        banStartedAt: old.banStartedAt,
+        adminBanned: true,
+      );
+      _broadcastAll();
+    }
+    await _logAudit(
+      action: 'emergency_user_banned',
+      entityType: 'user',
+      entityId: userId,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Emergency requests blocked until administrator unbans.',
+    );
+  }
+
+  Future<void> updateUserProfile(
+    String userId, {
+    required String name,
+    required String address,
+  }) async {
+    _requireAdmin();
+    if (name.trim().isEmpty) {
+      throw ArgumentError('Name is required.');
+    }
+    if (isLiveFirebase) {
+      await _firestore!.collection('users').doc(userId).update({
+        'name': name.trim(),
+        'address': address.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    } else {
+      final index = _mockUsers.indexWhere((u) => u.id == userId);
+      if (index < 0) {
+        throw StateError('Profile not found.');
+      }
+      _mockUsers[index] = _mockUsers[index].copyWith(
+        name: name.trim(),
+        address: address.trim(),
+      );
+      _broadcastAll();
+    }
+    await _logAudit(
+      action: 'profile_updated',
+      entityType: 'user',
+      entityId: userId,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Administrator updated profile.',
+    );
+  }
+
+  Future<AppUser> createManagedUser({
+    required String name,
+    required String cnic,
+    required String phone,
+    required String password,
+    required String role,
+    String email = '',
+    String address = '',
+  }) async {
+    _requireAdmin();
+    if (name.trim().length < 2) throw ArgumentError('Enter the full name.');
+    if (!AppUser.isValidCnic(cnic)) {
+      throw ArgumentError('Enter a valid 13-digit CNIC.');
+    }
+    if (!AppUser.isValidPhone(phone)) {
+      throw ArgumentError('Enter a valid Pakistani mobile number.');
+    }
+    if (password.length < 8) {
+      throw ArgumentError('Password must be at least 8 characters.');
+    }
+    if (![AppRoles.user, AppRoles.employee].contains(role)) {
+      throw ArgumentError('Choose Citizen or Driver.');
+    }
+    if (email.trim().isNotEmpty &&
+        !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$').hasMatch(email.trim())) {
+      throw ArgumentError('Enter a valid contact email.');
+    }
+    final digits = AppUser.cleanCnic(cnic);
+    final normalizedPhone = AppUser.normalizePhone(phone);
+    final random = Random.secure();
+    final opaque = base64UrlEncode(
+      List.generate(16, (_) => random.nextInt(256)),
+    ).replaceAll('=', '').toLowerCase();
+    final authEmail = 'account_$opaque@citizen.edhi.org';
+    FirebaseApp? secondary;
+    FirebaseAuth? secondaryAuth;
+    User? created;
+    bool saved = false;
+    late AppUser profile;
+    try {
+      if (isLiveFirebase) {
+        final aliases = await Future.wait([
+          _firestore!.collection('login_aliases').doc('cnic_$digits').get(),
+          _firestore!
+              .collection('login_aliases')
+              .doc('phone_$normalizedPhone')
+              .get(),
+        ]);
+        if (aliases.any((a) => a.exists)) {
+          throw StateError('This CNIC or phone number is already registered.');
+        }
+        // A separate Auth instance preserves the administrator's session.
+        secondary = await Firebase.initializeApp(
+          name: 'admin-create-$opaque',
+          options: Firebase.app().options,
+        );
+        secondaryAuth = FirebaseAuth.instanceFor(app: secondary);
+        if (kIsWeb) await secondaryAuth.setPersistence(Persistence.NONE);
+        created = (await secondaryAuth.createUserWithEmailAndPassword(
+          email: authEmail,
+          password: password,
+        )).user;
+        if (created == null) {
+          throw StateError('Account creation did not complete.');
+        }
+      } else if (_mockUsers.any(
+        (u) =>
+            AppUser.cleanCnic(u.cnic) == digits ||
+            AppUser.normalizePhone(u.phone) == normalizedPhone,
+      )) {
+        throw StateError('This CNIC or phone number is already registered.');
+      }
+      profile = AppUser(
+        id: created?.uid ?? _newRecordId('USR'),
+        name: name.trim(),
+        email: email.trim().isEmpty ? authEmail : email.trim().toLowerCase(),
+        cnic: AppUser.formatCnic(cnic),
+        phone: normalizedPhone,
+        role: role,
+        address: address.trim(),
+        createdAt: _now(),
+      );
+      if (isLiveFirebase) {
+        final claimed = await _firestore!.runTransaction<bool>((tx) async {
+          final phoneRef = _firestore!
+              .collection('phone_claims')
+              .doc(normalizedPhone);
+          final cnicRef = _firestore!
+              .collection('login_aliases')
+              .doc('cnic_$digits');
+          final aliasRef = _firestore!
+              .collection('login_aliases')
+              .doc('phone_$normalizedPhone');
+          final phoneClaim = await tx.get(phoneRef);
+          final cnicClaim = await tx.get(cnicRef);
+          final aliasClaim = await tx.get(aliasRef);
+          if (phoneClaim.exists || cnicClaim.exists || aliasClaim.exists) {
+            return false;
+          }
+          tx.set(phoneRef, {'userId': profile.id});
+          tx.set(cnicRef, {'authEmail': authEmail});
+          tx.set(aliasRef, {'authEmail': authEmail});
+          tx.set(_firestore!.collection('users').doc(profile.id), {
+            ...profile.toMap(),
+            'authEmail': authEmail,
+          });
+          return true;
+        });
+        if (!claimed) {
+          throw StateError('This CNIC or phone number is already registered.');
+        }
+      } else {
+        _mockUsers.add(profile);
+        _broadcastAll();
+      }
+      saved = true;
+    } catch (error) {
+      if (created != null && !saved) {
+        try {
+          await created.delete();
+        } catch (_) {
+          throw StateError(
+            'Account setup failed and Auth cleanup could not complete. Contact Operations before retrying.',
+          );
+        }
+      }
+      rethrow;
+    } finally {
+      try {
+        await secondaryAuth?.signOut();
+      } finally {
+        await secondary?.delete();
+      }
+    }
+    await _logAudit(
+      action: 'user_created',
+      entityType: 'user',
+      entityId: profile.id,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Administrator created a $role account.',
+    );
+    return profile;
+  }
+
+  Future<void> deleteManagedUser(String userId) async {
+    _requireAdmin();
+    if (userId == _sessionUserId ||
+        (isLiveFirebase && FirebaseAuth.instance.currentUser?.uid == userId)) {
+      throw StateError('You cannot delete your own administrator account.');
+    }
+    bool open(String status) => ![
+      EmergencyStatus.completed,
+      EmergencyStatus.cancelled,
+    ].contains(status);
+    if (isLiveFirebase) {
+      final jobs = await _firestore!
+          .collection('emergency_requests')
+          .where('userId', isEqualTo: userId)
+          .get();
+      final units = await _firestore!
+          .collection('employees')
+          .where('userId', isEqualTo: userId)
+          .get();
+      final result = await _firestore!.runTransaction<String>((tx) async {
+        final profileRef = _firestore!.collection('users').doc(userId);
+        final profile = await tx.get(profileRef);
+        if (!profile.exists) return 'User no longer exists.';
+        final data = profile.data()!;
+        final unitRefs = <String, DocumentReference<Map<String, dynamic>>>{
+          for (final u in units.docs) u.id: u.reference,
+        };
+        final linkRef = _firestore!.collection('driver_links').doc(userId);
+        final link = await tx.get(linkRef);
+        final unitId = link.data()?['employeeId'] as String?;
+        if (unitId != null && unitId.isNotEmpty) {
+          unitRefs[unitId] = _firestore!.collection('employees').doc(unitId);
+        }
+        final freshUnits = <DocumentSnapshot<Map<String, dynamic>>>[];
+        for (final ref in unitRefs.values) {
+          freshUnits.add(await tx.get(ref));
+        }
+        for (final job in jobs.docs) {
+          final fresh = await tx.get(job.reference);
+          if (fresh.exists &&
+              open(fresh.data()?['status'] as String? ?? 'Pending')) {
+            return 'Complete or cancel this user’s active emergency requests before deleting.';
+          }
+        }
+        if (freshUnits.any(
+          (u) =>
+              u.data()?['userId'] == userId &&
+              (u.data()?['status'] == 'busy' ||
+                  (u.data()?['activeRequestId'] as String? ?? '').isNotEmpty),
+        )) {
+          return 'Complete the driver’s active mission before deleting.';
+        }
+        final phone = data['phone'] as String? ?? '';
+        final cnic = AppUser.cleanCnic(data['cnic'] as String? ?? '');
+        final aliases = <DocumentReference<Map<String, dynamic>>>[
+          if (phone.isNotEmpty)
+            _firestore!
+                .collection('login_aliases')
+                .doc('phone_${AppUser.normalizePhone(phone)}'),
+          if (cnic.isNotEmpty)
+            _firestore!.collection('login_aliases').doc('cnic_$cnic'),
+        ];
+        final claimRef = phone.isEmpty
+            ? null
+            : _firestore!
+                  .collection('phone_claims')
+                  .doc(AppUser.normalizePhone(phone));
+        final claim = claimRef == null ? null : await tx.get(claimRef);
+        final aliasDocs = <DocumentSnapshot<Map<String, dynamic>>>[];
+        for (final ref in aliases) {
+          aliasDocs.add(await tx.get(ref));
+        }
+        final authEmail = data['authEmail'] ?? '$cnic@citizen.edhi.org';
+        for (final alias in aliasDocs) {
+          if (alias.data()?['authEmail'] == authEmail) {
+            tx.delete(alias.reference);
+          }
+        }
+        if (claim?.data()?['userId'] == userId) tx.delete(claimRef!);
+        for (final unit in freshUnits) {
+          if (unit.data()?['userId'] == userId) {
+            tx.update(unit.reference, {
+              'userId': '',
+              'phone': '',
+              'status': 'offline',
+            });
+          }
+        }
+        tx.delete(linkRef);
+        tx.delete(_firestore!.collection('emergency_usage').doc(userId));
+        tx.delete(profileRef);
+        return '';
+      });
+      if (result.isNotEmpty) throw StateError(result);
+    } else {
+      if (!_mockUsers.any((u) => u.id == userId)) {
+        throw StateError('User no longer exists.');
+      }
+      if (_mockRequests.any((r) => r.userId == userId && open(r.status))) {
+        throw StateError(
+          'Complete or cancel this user’s active emergency requests before deleting.',
+        );
+      }
+      if (_mockEmployees.any(
+        (u) =>
+            u.userId == userId &&
+            (u.status == 'busy' || u.activeRequestId.isNotEmpty),
+      )) {
+        throw StateError(
+          'Complete the driver’s active mission before deleting.',
+        );
+      }
+      for (var i = 0; i < _mockEmployees.length; i++) {
+        if (_mockEmployees[i].userId == userId) {
+          _mockEmployees[i] = _mockEmployees[i].copyWith(
+            userId: '',
+            phone: '',
+            status: 'offline',
+          );
+        }
+      }
+      _mockUsers.removeWhere((u) => u.id == userId);
+      _mockUsage.remove(userId);
+      _broadcastAll();
+    }
+    await _logAudit(
+      action: 'user_deleted',
+      entityType: 'user',
+      entityId: userId,
+      actorId: _sessionUserId ?? 'admin',
+      details:
+          'Deleted app profile and login aliases; historical reports retained.',
+    );
+  }
+
+  static const adminCollections = [
+    'users',
+    'employees',
+    'edhi_centers',
+    'emergency_requests',
+    'emergency_usage',
+    'route_demos',
+    'driver_links',
+    'donations',
+    'blood_donors',
+    'blood_needs',
+    'missing_persons',
+    'feedback',
+    'chat_messages',
+    'notifications',
+    'tasks',
+    'photo_attachments',
+    'phone_claims',
+    'login_aliases',
+    'audit_events',
+  ];
+
+  void _checkAdminCollection(String collection) {
+    _requireAdmin();
+    if (!adminCollections.contains(collection)) {
+      throw ArgumentError('Unknown collection.');
+    }
+  }
+
+  Map<String, Map<String, dynamic>> _localAdminRecords(String collection) {
+    return switch (collection) {
+      'users' => {for (final x in _mockUsers) x.id: x.toMap()},
+      'employees' => {for (final x in _mockEmployees) x.employeeId: x.toMap()},
+      'emergency_requests' => {
+        for (final x in _mockRequests) x.requestId: x.toMap(),
+      },
+      'donations' => {for (final x in _mockDonations) x.donationId: x.toMap()},
+      'blood_donors' => {
+        for (final x in _mockBloodDonors) x.donorId: x.toMap(),
+      },
+      'blood_needs' => {for (final x in _mockBloodNeeds) x.id: x.toMap()},
+      'edhi_centers' => {for (final x in _mockCenters) x.centerId: x.toMap()},
+      'missing_persons' => {
+        for (final x in _mockMissingPersons) x.reportId: x.toMap(),
+      },
+      'feedback' => {for (final x in _mockFeedback) x.feedbackId: x.toMap()},
+      'chat_messages' => {
+        for (final x in _mockChatMessages) x.messageId: x.toMap(),
+      },
+      'emergency_usage' => {
+        for (final x in _mockUsage.entries)
+          x.key: {
+            'cancellationCount': x.value.cancellationCount,
+            'adminBanned': x.value.adminBanned,
+            'windowStartedAt': x.value.windowStartedAt == null
+                ? null
+                : Timestamp.fromDate(x.value.windowStartedAt!),
+            'banStartedAt': x.value.banStartedAt == null
+                ? null
+                : Timestamp.fromDate(x.value.banStartedAt!),
+          },
+      },
+      _ => {},
+    };
+  }
+
+  Stream<Map<String, Map<String, dynamic>>> watchAdminRecords(
+    String collection,
+  ) async* {
+    _checkAdminCollection(collection);
+    if (isLiveFirebase) {
+      // Bound listener cost; use an exact document ID to inspect older records.
+      yield* _firestore!
+          .collection(collection)
+          .orderBy(FieldPath.documentId)
+          .limit(200)
+          .snapshots()
+          .map((snap) => {for (final doc in snap.docs) doc.id: doc.data()});
+    } else {
+      yield _localAdminRecords(collection);
+      yield* _usersController.stream.map((_) => _localAdminRecords(collection));
+    }
+  }
+
+  Future<Map<String, dynamic>?> getAdminRecord(
+    String collection,
+    String id,
+  ) async {
+    _checkAdminCollection(collection);
+    return isLiveFirebase
+        ? (await _firestore!.collection(collection).doc(id).get()).data()
+        : _localAdminRecords(collection)[id];
+  }
+
+  static dynamic _encodeDatabaseValue(dynamic value) {
+    if (value is Timestamp) {
+      return {
+        '__type': 'timestamp',
+        'value': value.toDate().toUtc().toIso8601String(),
+      };
+    }
+    if (value is GeoPoint) {
+      return {
+        '__type': 'geopoint',
+        'latitude': value.latitude,
+        'longitude': value.longitude,
+      };
+    }
+    if (value is Blob) {
+      return {'__type': 'bytes', 'value': base64Encode(value.bytes)};
+    }
+    if (value is DocumentReference) {
+      return {'__type': 'reference', 'value': value.path};
+    }
+    if (value is Map) {
+      return value.map(
+        (k, v) => MapEntry(k.toString(), _encodeDatabaseValue(v)),
+      );
+    }
+    if (value is List) {
+      return value.map(_encodeDatabaseValue).toList();
+    }
+    return value;
+  }
+
+  static String adminRecordJson(Map<String, dynamic> data) =>
+      const JsonEncoder.withIndent('  ').convert(_encodeDatabaseValue(data));
+
+  dynamic _decodeDatabaseValue(dynamic value) {
+    if (value is Map) {
+      if (value['__type'] == 'timestamp') {
+        return Timestamp.fromDate(DateTime.parse(value['value'] as String));
+      }
+      if (value['__type'] == 'geopoint') {
+        return GeoPoint(
+          (value['latitude'] as num).toDouble(),
+          (value['longitude'] as num).toDouble(),
+        );
+      }
+      if (value['__type'] == 'bytes') {
+        return Blob(base64Decode(value['value'] as String));
+      }
+      if (value['__type'] == 'reference') {
+        if (!isLiveFirebase) {
+          throw ArgumentError('References require Firebase.');
+        }
+        return _firestore!.doc(value['value'] as String);
+      }
+      return value.map(
+        (k, v) => MapEntry(k.toString(), _decodeDatabaseValue(v)),
+      );
+    }
+    if (value is List) {
+      return value.map(_decodeDatabaseValue).toList();
+    }
+    return value;
+  }
+
+  Future<void> saveAdminRecord(
+    String collection,
+    String id,
+    String json, {
+    required bool create,
+  }) async {
+    _checkAdminCollection(collection);
+    if (collection == 'audit_events') {
+      throw StateError('Audit history is read-only.');
+    }
+    if (id.trim().isEmpty || id.contains('/')) {
+      throw ArgumentError('A valid document ID is required.');
+    }
+    final decoded = jsonDecode(json);
+    if (decoded is! Map<String, dynamic>) {
+      throw ArgumentError('Enter a JSON object.');
+    }
+    final data = Map<String, dynamic>.from(
+      _decodeDatabaseValue(decoded) as Map,
+    );
+    if (collection == 'users' &&
+        id == _sessionUserId &&
+        (data['role'] != AppRoles.admin || data['isActive'] != true)) {
+      throw StateError('You cannot remove your own administrator access.');
+    }
+    if (isLiveFirebase) {
+      final ref = _firestore!.collection(collection).doc(id);
+      await _firestore!.runTransaction((tx) async {
+        final current = await tx.get(ref);
+        if (current.exists == create) {
+          throw StateError(
+            create
+                ? 'Document ID already exists.'
+                : 'Document no longer exists.',
+          );
+        }
+        tx.set(ref, data);
+      });
+    } else {
+      // The editor uses the real database. Avoid pretending unsupported demo writes succeeded.
+      throw StateError('Connect Firebase to edit database records.');
+    }
+    await _logAudit(
+      action: create ? 'database_record_added' : 'database_record_edited',
+      entityType: collection,
+      entityId: id,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Administrator database editor.',
+    );
+  }
+
+  Future<void> deleteAdminRecord(String collection, String id) async {
+    _checkAdminCollection(collection);
+    if (collection == 'audit_events') {
+      throw StateError('Audit history is read-only.');
+    }
+    if (collection == 'users' && id == _sessionUserId) {
+      throw StateError('You cannot delete your own account.');
+    }
+    if (!isLiveFirebase) {
+      throw StateError('Connect Firebase to delete database records.');
+    }
+    final data = await getAdminRecord(collection, id);
+    if (data == null) {
+      throw StateError('Document no longer exists.');
+    }
+    if (collection == 'employees' && data['status'] == 'busy') {
+      throw StateError(
+        'Complete or cancel the active mission before deleting this unit.',
+      );
+    }
+    if (collection == 'emergency_requests' &&
+        !['Completed', 'Cancelled'].contains(data['status'])) {
+      await updateRequestStatus(
+        id,
+        EmergencyStatus.cancelled,
+        adminOverride: true,
+      );
+    }
+    await _firestore!.collection(collection).doc(id).delete();
+    await _logAudit(
+      action: 'database_record_deleted',
+      entityType: collection,
+      entityId: id,
+      actorId: _sessionUserId ?? 'admin',
+      details: 'Administrator deleted database record.',
+    );
+  }
+
   Stream<List<AppUser>> getUsersStream() async* {
     if (isLiveFirebase) {
       yield* _firestore!
@@ -3954,6 +4766,10 @@ class FirestoreService extends ChangeNotifier {
   }
 
   Future<void> updateUserStatus(String userId, bool isActive) async {
+    _requireAdmin();
+    if (userId == _sessionUserId && !isActive) {
+      throw StateError('You cannot deactivate your own administrator account.');
+    }
     if (isLiveFirebase) {
       await _firestore!
           .collection(AppConstants.usersCollection)
@@ -3970,7 +4786,7 @@ class FirestoreService extends ChangeNotifier {
       action: isActive ? 'user_activated' : 'user_suspended',
       entityType: 'user',
       entityId: userId,
-      actorId: 'admin',
+      actorId: _sessionUserId ?? 'admin',
       details: 'Account active state set to $isActive',
     );
   }
@@ -4017,7 +4833,9 @@ class FirestoreService extends ChangeNotifier {
     String contentType,
     String folder,
   ) async {
-    if (!isLiveFirebase) throw StateError('Photo upload requires Firebase.');
+    if (!isLiveFirebase) {
+      throw StateError('Photo upload requires Firebase.');
+    }
     if (bytes.isEmpty ||
         bytes.length > 5 * 1024 * 1024 ||
         !const [
@@ -4028,7 +4846,9 @@ class FirestoreService extends ChangeNotifier {
       throw ArgumentError('Choose a JPEG, PNG or WebP image under 5 MB.');
     }
     final uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null) throw StateError('Please sign in.');
+    if (uid == null) {
+      throw StateError('Please sign in.');
+    }
     final image = await PhotoCodec.compress(bytes);
     final ref = _firestore!.collection('photo_attachments').doc();
     await ref.set({

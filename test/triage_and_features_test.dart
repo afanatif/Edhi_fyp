@@ -75,14 +75,16 @@ void main() {
         'I need an ambulance immediately!',
       );
       expect(reply.isEmergencyIntent, isTrue);
-      expect(reply.text.contains('EMERGENCY DETECTED'), isTrue);
+      expect(reply.text, contains('115'));
+      expect(reply.text, contains('1020'));
+      expect(reply.text, contains('now'));
     });
 
     test('Chatbot responds accurately to Blood Bank inquiries', () {
       final reply = AITriageService.getChatbotResponse(
         'How do I donate blood?',
       );
-      expect(reply.text.contains('Blood Services'), isTrue);
+      expect(reply.text.contains('Blood Bank'), isTrue);
     });
 
     test(

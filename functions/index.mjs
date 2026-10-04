@@ -2,6 +2,11 @@ import {createHash} from 'node:crypto';
 import {initializeApp} from 'firebase-admin/app';
 import {getAuth} from 'firebase-admin/auth';
 import {getFirestore, Timestamp} from 'firebase-admin/firestore';
+import {FieldValue} from 'firebase-admin/firestore';
+import {getFunctions} from 'firebase-admin/functions';
+import {onDocumentWritten} from 'firebase-functions/v2/firestore';
+import {onTaskDispatched} from 'firebase-functions/v2/tasks';
+import {arrivalDeadline, canCommitArrival} from './arrival-policy.mjs';
 import {onRequest} from 'firebase-functions/v2/https';
 import {defineString} from 'firebase-functions/params';
 import {createPhoneLogin, normalizePhone, PhoneLoginError} from './phone-login.mjs';
@@ -9,6 +14,44 @@ import {createPhoneLogin, normalizePhone, PhoneLoginError} from './phone-login.m
 initializeApp();
 const auth = getAuth();
 const db = getFirestore();
+
+// Optional Blaze backend: arrival also commits when every client is closed.
+// Old scheduled tasks become harmless after pause, retiming, cancellation or reassignment.
+export const scheduleAmbulanceArrival = onDocumentWritten({
+  document: 'route_demos/{employeeId}', region: 'us-central1', maxInstances: 5,
+}, async (event) => {
+  const route = event.data?.after.data();
+  const deadline = arrivalDeadline(route);
+  if (!route?.enabled || route.pausedAt != null || route.stoppedAt != null || deadline === null || !route.points?.length) return;
+  await getFunctions().taskQueue('locations/us-central1/functions/commitAmbulanceArrival').enqueue({
+    employeeId: event.params.employeeId, requestId: route.requestId,
+    startedAtMs: route.startedAt.toMillis(), durationSeconds: route.durationSeconds,
+  }, {scheduleTime: new Date(Math.max(Date.now(), deadline)), dispatchDeadlineSeconds: 60});
+});
+
+export const commitAmbulanceArrival = onTaskDispatched({
+  region: 'us-central1', retryConfig: {maxAttempts: 5, minBackoffSeconds: 2},
+  rateLimits: {maxConcurrentDispatches: 10}, timeoutSeconds: 60, maxInstances: 5,
+}, async ({data}) => {
+  const {employeeId, requestId} = data;
+  if (typeof employeeId !== 'string' || typeof requestId !== 'string' ||
+      employeeId.includes('/') || requestId.includes('/') || !employeeId || !requestId) return;
+  const routeRef = db.doc(`route_demos/${employeeId}`);
+  const unitRef = db.doc(`employees/${employeeId}`);
+  const jobRef = db.doc(`emergency_requests/${requestId}`);
+  await db.runTransaction(async (tx) => {
+    const [saved, employee, request] = await tx.getAll(routeRef, unitRef, jobRef);
+    const route = saved.data();
+    const deadline = arrivalDeadline(route);
+    if (route?.enabled && route.requestId === requestId && route.pausedAt == null &&
+        deadline !== null && Date.now() < deadline) throw new Error('Arrival deadline has not elapsed; retry.');
+    if (!canCommitArrival({route, unit: employee.data(), job: request.data(), employeeId, expected: data, now: Date.now()})) return;
+    const end = route.points.at(-1);
+    tx.update(jobRef, {status: 'Arrived', updatedAt: FieldValue.serverTimestamp()});
+    tx.update(unitRef, {currentLat: end.lat, currentLng: end.lng, speedKmh: 0});
+    tx.update(routeRef, {enabled: false, stoppedAt: FieldValue.serverTimestamp()});
+  });
+});
 const webApiKey = defineString('FIREBASE_WEB_API_KEY', {
   description: 'Web app apiKey from this Firebase project (Project settings → General).',
 });

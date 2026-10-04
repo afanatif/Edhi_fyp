@@ -1,700 +1,439 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
-import '../../../core/constants/app_constants.dart';
+import '../../../services/auth_service.dart';
 import '../../../services/firestore_service.dart';
 import '../../../models/app_user.dart';
-import '../../../models/employee.dart';
-import '../../../core/widgets/skeleton_loader.dart';
+import '../../../models/emergency_usage.dart';
+import 'admin_user_dialogs.dart';
 
 class AdminUsersView extends StatefulWidget {
   const AdminUsersView({super.key});
-
   @override
   State<AdminUsersView> createState() => _AdminUsersViewState();
 }
 
 class _AdminUsersViewState extends State<AdminUsersView> {
-  String _selectedRoleFilter = 'All';
-  String _searchQuery = '';
+  String _role = 'All', _search = '';
+  final Set<String> _busy = {};
+  late final Stream<List<AppUser>> _users;
+  late final Stream<Map<String, EmergencyUsage>> _usage;
+  Timer? _timer;
+  @override
+  void initState() {
+    super.initState();
+    final service = context.read<FirestoreService>();
+    _users = service.getUsersStream();
+    _usage = service.watchAllEmergencyUsage();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) setState(() {});
+    });
+  }
 
-  void _showEditUserDialog(BuildContext context, AppUser user) {
-    final nameController = TextEditingController(text: user.name);
-    final phoneController = TextEditingController(text: user.phone);
-    final addressController = TextEditingController(text: user.address);
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Edit User: ${user.name}'),
-        content: SizedBox(
-          width: 400,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(
-                  labelText: 'Full Name',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: phoneController,
-                decoration: const InputDecoration(
-                  labelText: 'Phone Number',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: addressController,
-                decoration: const InputDecoration(
-                  labelText: 'Station / Address',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.reliefGreenMedium,
-            ),
-            onPressed: () {
-              Navigator.pop(ctx);
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Updated profile for ${nameController.text}'),
-                  backgroundColor: AppColors.reliefGreenMedium,
-                ),
-              );
-            },
-            child: const Text('Save Changes'),
-          ),
-        ],
-      ),
-    );
+  Future<void> _action(AppUser user, Future<void> Function() perform) async {
+    if (_busy.contains(user.id)) return;
+    setState(() => _busy.add(user.id));
+    try {
+      await perform();
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy.remove(user.id));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final firestore = context.watch<FirestoreService>();
-
+    final service = context.watch<FirestoreService>();
+    final selfId = context.read<AuthService>().currentUser?.id;
     return StreamBuilder<List<AppUser>>(
-      stream: firestore.getUsersStream(),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.waiting &&
-            !snapshot.hasData) {
+      stream: _users,
+      builder: (context, usersSnapshot) => StreamBuilder<Map<String, EmergencyUsage>>(
+        stream: _usage,
+        builder: (context, usageSnapshot) {
+          if (usersSnapshot.hasError || usageSnapshot.hasError) {
+            return const Text(
+              'Unable to load user management. Check your connection and administrator access.',
+            );
+          }
+          if (!usersSnapshot.hasData || !usageSnapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          final users = usersSnapshot.data!;
+          final usage = usageSnapshot.data!;
+          final now = DateTime.now();
+          final filtered = users.where((user) {
+            final query = _search.trim().toLowerCase();
+            final matches =
+                query.isEmpty ||
+                [
+                  user.name,
+                  user.email,
+                  user.phone,
+                  user.cnic,
+                  AppUser.cleanCnic(user.cnic),
+                ].any((v) => v.toLowerCase().contains(query));
+            final matchesRole = switch (_role) {
+              'Citizens' => user.isUser,
+              'Drivers' => user.isEmployee,
+              'Admins' => user.isAdmin,
+              'Flagged' => (usage[user.id]?.cancellationCount ?? 0) >= 3,
+              'Banned' => usage[user.id]?.isBanned(now) ?? false,
+              _ => true,
+            };
+            return matches && matchesRole;
+          }).toList();
           return Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Row(
-                children: const [
-                  Expanded(child: SkeletonMetricTile()),
-                  SizedBox(width: 12),
-                  Expanded(child: SkeletonMetricTile()),
-                  SizedBox(width: 12),
-                  Expanded(child: SkeletonMetricTile()),
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                spacing: 16,
+                runSpacing: 12,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  const Text(
+                    'User management',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                  ),
+                  FilledButton.icon(
+                    onPressed: () => showAdminUserDialog(context),
+                    icon: const Icon(Icons.person_add_alt_1),
+                    label: const Text('Add user'),
+                  ),
                 ],
               ),
-              const SizedBox(height: 24),
-              const SkeletonBox(
-                width: double.infinity,
-                height: 50,
-                borderRadius: 12,
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 16,
+                runSpacing: 8,
+                children: [
+                  Text('${users.length} users'),
+                  Text('${users.where((u) => u.isUser).length} citizens'),
+                  Text(
+                    '${users.where((u) => (usage[u.id]?.cancellationCount ?? 0) >= 3).length} flagged',
+                  ),
+                  Text(
+                    '${users.where((u) => usage[u.id]?.isBanned(now) ?? false).length} banned',
+                  ),
+                ],
               ),
               const SizedBox(height: 16),
-              const SkeletonListView(count: 5, skeleton: SkeletonUserCard()),
+              TextField(
+                onChanged: (value) => setState(() => _search = value),
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.search),
+                  hintText: 'Search by name, CNIC, email or phone',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children:
+                    [
+                          'All',
+                          'Citizens',
+                          'Drivers',
+                          'Admins',
+                          'Flagged',
+                          'Banned',
+                        ]
+                        .map(
+                          (role) => ChoiceChip(
+                            label: Text(role),
+                            selected: _role == role,
+                            onSelected: (selected) {
+                              if (selected) setState(() => _role = role);
+                            },
+                          ),
+                        )
+                        .toList(),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Yellow rows mark three or more cancellations. Admin bans last until unbanned; account activation is separate.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              ),
+              const SizedBox(height: 16),
+              if (filtered.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('No matching users.'),
+                ),
+              for (final user in filtered) ...[
+                _card(
+                  user,
+                  usage[user.id] ?? const EmergencyUsage(),
+                  service,
+                  selfId,
+                ),
+                const SizedBox(height: 12),
+              ],
             ],
           );
-        }
-        final users = snapshot.data ?? [];
-        final employees = firestore.getAllEmployees();
+        },
+      ),
+    );
+  }
 
-        final filteredUsers = users.where((u) {
-          final query = _searchQuery.trim().toLowerCase();
-          final matchesSearch =
-              query.isEmpty ||
-              u.name.toLowerCase().contains(query) ||
-              u.email.toLowerCase().contains(query) ||
-              u.phone.contains(query) ||
-              u.cnic.toLowerCase().contains(query) ||
-              AppUser.cleanCnic(u.cnic).contains(query);
-          if (!matchesSearch) return false;
-
-          if (_selectedRoleFilter == 'Citizens') return u.role == AppRoles.user;
-          if (_selectedRoleFilter == 'Drivers') {
-            return u.role == AppRoles.employee;
-          }
-          if (_selectedRoleFilter == 'Admins') return u.role == AppRoles.admin;
-          return true;
-        }).toList();
-
-        final citizenCount = users.where((u) => u.role == AppRoles.user).length;
-        final driverCount = employees.length;
-        final activeDrivers = employees
-            .where((e) => e.status == 'available')
-            .length;
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Header stats
-            Row(
-              children: [
-                Expanded(
-                  child: _buildMetricTile(
-                    'Total Users',
-                    '${users.length}',
-                    Icons.people_alt_outlined,
-                    AppColors.emergencyRed,
+  Widget _card(
+    AppUser user,
+    EmergencyUsage usage,
+    FirestoreService service,
+    String? selfId,
+  ) {
+    final flagged = usage.cancellationCount >= 3;
+    final banned = usage.isBanned(DateTime.now());
+    final busy = _busy.contains(user.id);
+    final self = selfId == user.id;
+    final unit = service
+        .getAllEmployees()
+        .where((e) => e.userId == user.id || e.employeeId == user.id)
+        .firstOrNull;
+    final color = user.isAdmin
+        ? Colors.purple
+        : user.isEmployee
+        ? AppColors.emergencyRed
+        : AppColors.reliefGreenMedium;
+    final info = Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CircleAvatar(
+          radius: 22,
+          backgroundColor: color.withValues(alpha: 0.1),
+          child: Icon(
+            user.isAdmin
+                ? Icons.admin_panel_settings
+                : user.isEmployee
+                ? Icons.emergency
+                : Icons.person,
+            color: color,
+          ),
+        ),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    user.name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildMetricTile(
-                    'Citizens',
-                    '$citizenCount',
-                    Icons.person_outline,
-                    AppColors.reliefGreenMedium,
+                  _tag(user.role.toUpperCase(), color),
+                  if (user.cnic.isNotEmpty) _tag(user.cnic, Colors.blue),
+                  if (!user.isActive) _tag('ACCOUNT INACTIVE', Colors.red),
+                  if (flagged)
+                    _tag(
+                      '${usage.cancellationCount} cancellations',
+                      Colors.orange.shade900,
+                    ),
+                  if (banned) _tag('EMERGENCY REQUESTS BANNED', Colors.red),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 14,
+                runSpacing: 6,
+                children: [
+                  if (user.email.isNotEmpty)
+                    Text(
+                      user.email,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  Text(
+                    user.phone,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildMetricTile(
-                    'Ambulance Drivers',
-                    '$activeDrivers / $driverCount Available',
-                    Icons.directions_car_outlined,
-                    AppColors.emergencyRedDark,
+                  if (user.address.isNotEmpty)
+                    Text(
+                      user.address,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                ],
+              ),
+              if (user.isEmployee) ...[
+                const SizedBox(height: 8),
+                Text(
+                  unit == null
+                      ? 'No ambulance linked'
+                      : 'Assigned vehicle: ${unit.vehicleNumber} · ${unit.status.toUpperCase()}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 24),
-
-            // Controls Bar (Search + Filter Chips)
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          onChanged: (val) =>
-                              setState(() => _searchQuery = val),
-                          decoration: InputDecoration(
-                            prefixIcon: const Icon(
-                              Icons.search,
-                              color: AppColors.textSecondary,
-                            ),
-                            hintText:
-                                'Search by name, email, or contact number...',
-                            filled: true,
-                            fillColor: AppColors.background,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: 16,
-                              vertical: 12,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(10),
-                              borderSide: BorderSide.none,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Wrap(
-                        spacing: 8,
-                        children: ['All', 'Citizens', 'Drivers', 'Admins'].map((
-                          role,
-                        ) {
-                          final isSelected = _selectedRoleFilter == role;
-                          return ChoiceChip(
-                            label: Text(role),
-                            selected: isSelected,
-                            selectedColor: AppColors.reliefGreenMedium
-                                .withValues(alpha: 0.2),
-                            labelStyle: TextStyle(
-                              color: isSelected
-                                  ? AppColors.reliefGreenMedium
-                                  : AppColors.textPrimary,
-                              fontWeight: isSelected
-                                  ? FontWeight.w700
-                                  : FontWeight.w500,
-                              fontSize: 12,
-                            ),
-                            onSelected: (sel) {
-                              if (sel) {
-                                setState(() => _selectedRoleFilter = role);
-                              }
-                            },
-                          );
-                        }).toList(),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-
-            // Users Table / Cards
-            if (filteredUsers.isEmpty)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(48),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppColors.border),
+              if (banned) ...[
+                const SizedBox(height: 6),
+                Text(
+                  usage.adminBanned
+                      ? 'Banned by admin until unbanned'
+                      : 'Automatic restriction until ${usage.bannedUntil!.toLocal()}',
+                  style: TextStyle(fontSize: 12, color: Colors.red.shade700),
                 ),
-                child: const Column(
-                  children: [
-                    Icon(
-                      Icons.person_off_outlined,
-                      size: 48,
-                      color: AppColors.textSecondary,
-                    ),
-                    SizedBox(height: 12),
-                    Text(
-                      'No matching personnel found',
-                      style: TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              )
-            else
-              ListView.separated(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                itemCount: filteredUsers.length,
-                separatorBuilder: (context, _) => const SizedBox(height: 12),
-                itemBuilder: (context, idx) {
-                  final user = filteredUsers[idx];
-                  Employee? matchedEmp;
-                  if (user.role == AppRoles.employee) {
-                    matchedEmp = employees.firstWhere(
-                      (e) =>
-                          e.employeeId == user.id ||
-                          e.userId == user.id ||
-                          e.phone == user.phone,
-                      orElse: () => Employee(
-                        employeeId: user.id,
-                        userId: user.id,
-                        name: user.name,
-                        phone: user.phone,
-                        status: 'available',
-                        vehicleNumber: 'EDHI-AMB-201',
-                      ),
-                    );
-                  }
-
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(
-                        color: user.isActive
-                            ? AppColors.border
-                            : Colors.red.shade200,
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        CircleAvatar(
-                          radius: 22,
-                          backgroundColor: user.role == AppRoles.admin
-                              ? Colors.purple.shade50
-                              : user.role == AppRoles.employee
-                              ? AppColors.emergencyRed.withValues(alpha: 0.1)
-                              : AppColors.reliefGreenSoft,
-                          child: Icon(
-                            user.role == AppRoles.admin
-                                ? Icons.admin_panel_settings
-                                : user.role == AppRoles.employee
-                                ? Icons.emergency
-                                : Icons.person,
-                            color: user.role == AppRoles.admin
-                                ? Colors.purple
-                                : user.role == AppRoles.employee
-                                ? AppColors.emergencyRed
-                                : AppColors.reliefGreenMedium,
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    user.name,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w800,
-                                      fontSize: 15,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 3,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: user.role == AppRoles.admin
-                                          ? Colors.purple.withValues(alpha: 0.1)
-                                          : user.role == AppRoles.employee
-                                          ? AppColors.emergencyRed.withValues(
-                                              alpha: 0.1,
-                                            )
-                                          : AppColors.reliefGreenSoft,
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      user.role.toUpperCase(),
-                                      style: TextStyle(
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w800,
-                                        color: user.role == AppRoles.admin
-                                            ? Colors.purple
-                                            : user.role == AppRoles.employee
-                                            ? AppColors.emergencyRed
-                                            : AppColors.reliefGreenMedium,
-                                      ),
-                                    ),
-                                  ),
-                                  if (user.cnic.isNotEmpty) ...[
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFEFF6FF),
-                                        borderRadius: BorderRadius.circular(4),
-                                        border: Border.all(
-                                          color: const Color(0xFFBFDBFE),
-                                        ),
-                                      ),
-                                      child: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          const Icon(
-                                            Icons.badge_outlined,
-                                            size: 10,
-                                            color: Color(0xFF2563EB),
-                                          ),
-                                          const SizedBox(width: 3),
-                                          Text(
-                                            user.cnic,
-                                            style: const TextStyle(
-                                              fontSize: 9.5,
-                                              fontWeight: FontWeight.w700,
-                                              color: Color(0xFF1D4ED8),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                  if (!user.isActive) ...[
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 2,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        color: Colors.grey.shade200,
-                                        borderRadius: BorderRadius.circular(4),
-                                      ),
-                                      child: const Text(
-                                        'DEACTIVATED',
-                                        style: TextStyle(
-                                          fontSize: 9,
-                                          fontWeight: FontWeight.w800,
-                                          color: Colors.grey,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  const Icon(
-                                    Icons.email_outlined,
-                                    size: 13,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    user.email,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  const Icon(
-                                    Icons.phone_outlined,
-                                    size: 13,
-                                    color: AppColors.textSecondary,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    user.phone,
-                                    style: const TextStyle(
-                                      fontSize: 12,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                  if (user.address.isNotEmpty) ...[
-                                    const SizedBox(width: 12),
-                                    const Icon(
-                                      Icons.location_on_outlined,
-                                      size: 13,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                    const SizedBox(width: 4),
-                                    Expanded(
-                                      child: Text(
-                                        user.address,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: AppColors.textSecondary,
-                                        ),
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              if (matchedEmp != null) ...[
-                                const SizedBox(height: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.background,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      const Icon(
-                                        Icons.airport_shuttle,
-                                        size: 14,
-                                        color: AppColors.emergencyRed,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        'Assigned Vehicle: ${matchedEmp.vehicleNumber}',
-                                        style: const TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w700,
-                                        ),
-                                      ),
-                                      const SizedBox(width: 12),
-                                      Text(
-                                        'Status: ${matchedEmp.status.toUpperCase()}',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          fontWeight: FontWeight.w800,
-                                          color:
-                                              matchedEmp.status == 'available'
-                                              ? AppColors.reliefGreenMedium
-                                              : Colors.orange,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        // Action buttons
-                        Row(
-                          children: [
-                            if (matchedEmp != null) ...[
-                              Tooltip(
-                                message: matchedEmp.status == 'available'
-                                    ? 'Set driver standby / offline'
-                                    : 'Mark driver available for dispatch',
-                                child: TextButton.icon(
-                                  icon: Icon(
-                                    matchedEmp.status == 'available'
-                                        ? Icons.pause_circle
-                                        : Icons.play_circle,
-                                    size: 16,
-                                    color: matchedEmp.status == 'available'
-                                        ? Colors.orange
-                                        : AppColors.reliefGreenMedium,
-                                  ),
-                                  label: Text(
-                                    matchedEmp.status == 'available'
-                                        ? 'Standby'
-                                        : 'Go Active',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: matchedEmp.status == 'available'
-                                          ? Colors.orange
-                                          : AppColors.reliefGreenMedium,
-                                    ),
-                                  ),
-                                  onPressed: matchedEmp.status == 'busy'
-                                      ? null
-                                      : () async {
-                                          final newStatus =
-                                              matchedEmp!.status == 'available'
-                                              ? 'offline'
-                                              : 'available';
-                                          try {
-                                            await firestore
-                                                .updateEmployeeStatus(
-                                                  matchedEmp.employeeId,
-                                                  newStatus,
-                                                );
-                                          } catch (error) {
-                                            if (context.mounted) {
-                                              ScaffoldMessenger.of(
-                                                context,
-                                              ).showSnackBar(
-                                                SnackBar(
-                                                  content: Text('$error'),
-                                                ),
-                                              );
-                                            }
-                                            return;
-                                          }
-                                          if (!context.mounted) return;
-                                          ScaffoldMessenger.of(
-                                            context,
-                                          ).showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                '${user.name} marked $newStatus',
-                                              ),
-                                              duration: const Duration(
-                                                seconds: 2,
-                                              ),
-                                            ),
-                                          );
-                                        },
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                            ],
-                            IconButton(
-                              icon: const Icon(
-                                Icons.edit_outlined,
-                                size: 18,
-                                color: AppColors.textSecondary,
-                              ),
-                              tooltip: 'Edit Profile',
-                              onPressed: () =>
-                                  _showEditUserDialog(context, user),
-                            ),
-                            Tooltip(
-                              message: user.isActive
-                                  ? 'Deactivate User'
-                                  : 'Activate User',
-                              child: Switch(
-                                value: user.isActive,
-                                activeTrackColor: AppColors.reliefGreenMedium,
-                                onChanged: (val) {
-                                  firestore.updateUserStatus(user.id, val);
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text(
-                                        '${user.name} is now ${val ? "Active" : "Deactivated"}',
-                                      ),
-                                      duration: const Duration(seconds: 2),
-                                    ),
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _buildMetricTile(
-    String title,
-    String value,
-    IconData icon,
-    Color color,
-  ) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(10),
-            ),
-            child: Icon(icon, color: color, size: 22),
+              ],
+            ],
           ),
-          const SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+      ],
+    );
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        if (unit != null)
+          TextButton.icon(
+            onPressed: busy || unit.status == 'busy'
+                ? null
+                : () => _action(
+                    user,
+                    () => service.updateEmployeeStatus(
+                      unit.employeeId,
+                      unit.status == 'available' ? 'offline' : 'available',
+                    ),
+                  ),
+            icon: Icon(
+              unit.status == 'available'
+                  ? Icons.pause_circle_outline
+                  : Icons.play_circle_outline,
+              size: 18,
+            ),
+            label: Text(unit.status == 'available' ? 'Standby' : 'Go active'),
+          ),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Ban', style: TextStyle(fontSize: 12)),
+            Switch(
+              key: ValueKey('ban-${user.id}'),
+              value: banned,
+              activeThumbColor: Colors.red,
+              onChanged: busy || self
+                  ? null
+                  : (value) => _action(
+                      user,
+                      () => value
+                          ? service.banEmergencyUser(user.id)
+                          : service.unbanEmergencyUser(user.id),
+                    ),
+            ),
+            Text(
+              banned ? 'Banned' : 'Allowed',
+              style: const TextStyle(fontSize: 12),
+            ),
+          ],
+        ),
+        Tooltip(
+          message: 'Account activation',
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  fontSize: 11,
-                  color: AppColors.textSecondary,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w800,
-                ),
+              const Text('Active', style: TextStyle(fontSize: 12)),
+              Switch(
+                key: ValueKey('active-${user.id}'),
+                value: user.isActive,
+                onChanged: busy || self
+                    ? null
+                    : (value) => _action(
+                        user,
+                        () => service.updateUserStatus(user.id, value),
+                      ),
               ),
             ],
           ),
-        ],
+        ),
+        IconButton(
+          tooltip: 'Edit ${user.name}',
+          onPressed: busy
+              ? null
+              : () => showAdminUserDialog(context, user: user),
+          icon: const Icon(Icons.edit_outlined),
+        ),
+        IconButton(
+          tooltip: 'Delete ${user.name}',
+          onPressed: busy || self
+              ? null
+              : () => showAdminDeleteUserDialog(context, user),
+          icon: const Icon(Icons.delete_outline),
+          color: Colors.red,
+        ),
+      ],
+    );
+    return Container(
+      key: ValueKey('user-card-${user.id}'),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: flagged ? const Color(0xFFFFF3CD) : Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: flagged
+              ? Colors.amber.shade600
+              : !user.isActive
+              ? Colors.red.shade200
+              : AppColors.border,
+          width: flagged ? 2 : 1,
+        ),
+      ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth >= 1100) {
+            return Row(
+              children: [
+                Expanded(child: info),
+                const SizedBox(width: 16),
+                actions,
+              ],
+            );
+          }
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [info, const SizedBox(height: 14), actions],
+          );
+        },
       ),
     );
   }
+
+  Widget _tag(String label, Color color) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(6),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color),
+    ),
+  );
 }

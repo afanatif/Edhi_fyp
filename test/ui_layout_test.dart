@@ -39,6 +39,7 @@ void main() {
       'driver',
       'admin',
       'admin-missing',
+      'admin-database',
       'blood',
       'missing',
       'home',
@@ -95,7 +96,9 @@ void main() {
           'tracker' ||
           'tracker-arrived' => const EmergencyDetailView(requestId: 'REQ-101'),
           'driver' => const EmployeeDashboardScreen(),
-          'admin' || 'admin-missing' => const AdminDashboardScreen(),
+          'admin' ||
+          'admin-missing' ||
+          'admin-database' => const AdminDashboardScreen(),
           'blood' => const Scaffold(body: BloodBankScreen()),
           'home' => const UserHomeScreen(),
           'donations' => const Scaffold(body: DonationsScreen()),
@@ -153,6 +156,17 @@ void main() {
           expect(find.text('Missing-person reports'), findsOneWidget);
           expect(find.text('Ali Raza'), findsOneWidget);
           expect(find.text('Contact phone'), findsNWidgets(3));
+        }
+        if (screen == 'admin-database') {
+          await tester.tap(find.text('More'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 300));
+          await tester.ensureVisible(find.text('Database'));
+          await tester.tap(find.text('Database'));
+          await tester.pump();
+          await tester.pump(const Duration(milliseconds: 300));
+          expect(find.text('Database management'), findsOneWidget);
+          expect(find.text('Add document'), findsOneWidget);
         }
         if (screen == 'map') {
           await tester.tap(find.textContaining('402').first);

@@ -1,17 +1,8 @@
 import 'dart:math';
 import '../models/emergency_request.dart';
-
-class ChatbotReply {
-  final String text;
-  final bool isEmergencyIntent;
-  final List<String> quickSuggestions;
-
-  const ChatbotReply({
-    required this.text,
-    this.isEmergencyIntent = false,
-    this.quickSuggestions = const [],
-  });
-}
+import '../models/chatbot_reply.dart';
+import 'welfare_knowledge_service.dart';
+export '../models/chatbot_reply.dart';
 
 class FraudAssessment {
   final double score; // 0.0 (clean) to 1.0 (fraud/prank)
@@ -262,131 +253,8 @@ class AITriageService {
 
   static double _degreesToRadians(double degrees) => degrees * (pi / 180.0);
 
-  /// AI Chatbot Natural Language Processor & FAQ Engine for Edhi Foundation Services
-  static ChatbotReply getChatbotResponse(String message) {
-    final lower = message.trim().toLowerCase();
-
-    // Emergency Detection
-    if (lower.contains('emergency') ||
-        lower.contains('ambulance') ||
-        lower.contains('sos') ||
-        lower.contains('accident') ||
-        lower.contains('dying') ||
-        lower.contains('heart attack') ||
-        lower.contains('bleeding')) {
-      return const ChatbotReply(
-        text:
-            '⚠️ **EMERGENCY DETECTED:** If someone is in immediate danger, tap the button below to dispatch an ambulance or dial 115 directly. Keep the patient calm and apply basic first aid if trained.',
-        isEmergencyIntent: true,
-        quickSuggestions: [
-          'Dispatch Ambulance Now',
-          'Call Helpline 115',
-          'First Aid Instructions',
-        ],
-      );
-    }
-
-    // Blood Donation inquiries
-    if (lower.contains('blood') ||
-        lower.contains('donor') ||
-        lower.contains('plasma')) {
-      return const ChatbotReply(
-        text:
-            '🩸 **Edhi Blood Services:** You can register as a voluntary blood donor or submit an urgent blood request through our Blood Bank section. We connect verified donors with hospitals across Pakistan. Compatible donors are notified instantly.',
-        quickSuggestions: [
-          'Register as Blood Donor',
-          'Request Blood for Patient',
-          'Check Blood Groups',
-        ],
-      );
-    }
-
-    // Donations & Sadaqah inquiries
-    if (lower.contains('donate') ||
-        lower.contains('donation') ||
-        lower.contains('zakat') ||
-        lower.contains('ration') ||
-        lower.contains('money')) {
-      return const ChatbotReply(
-        text:
-            '💚 **Donations & Transparency:** Edhi Foundation accepts monetary donations, ration packages, clothing, and ambulance fuel support. Every contribution generates a verifiable digital receipt with a unique transaction ID. You can also request home pickup for in-kind food or clothing.',
-        quickSuggestions: [
-          'Donate Money Online',
-          'Ration / Food Drive',
-          'View Active Campaigns',
-        ],
-      );
-    }
-
-    // Edhi Centers inquiries
-    if (lower.contains('center') ||
-        lower.contains('office') ||
-        lower.contains('address') ||
-        lower.contains('location') ||
-        lower.contains('branch')) {
-      return const ChatbotReply(
-        text:
-            '🏢 **Edhi Centers & Stations:** We operate nationwide emergency relief centers. Key stations include Mandian (Abbottabad), G-8 Markaz (Islamabad), and Bolton Market (Karachi Head Office). All centers operate 24/7 emergency dispatch and morgue services.',
-        quickSuggestions: ['Find Nearest Center', 'Emergency Contacts'],
-      );
-    }
-
-    // First Aid inquiries
-    if (lower.contains('first aid') ||
-        lower.contains('cpr') ||
-        lower.contains('burn') ||
-        lower.contains('fracture') ||
-        lower.contains('chok')) {
-      return const ChatbotReply(
-        text:
-            '🩹 **First Aid Assistance:** EdhiConnect provides verified life-saving protocols for CPR, severe bleeding control (direct pressure), burns (cool running water for 10-20 min), and fractures. Access our First Aid Guide from the Quick Help dashboard.',
-        quickSuggestions: [
-          'How to do CPR',
-          'Treating Severe Bleeding',
-          'Burn First Aid',
-        ],
-      );
-    }
-
-    // Missing Persons inquiries
-    if (lower.contains('missing') ||
-        lower.contains('found') ||
-        lower.contains('lost person') ||
-        lower.contains('child')) {
-      return const ChatbotReply(
-        text:
-            '🔍 **Missing Persons & Reunification:** Edhi Foundation provides family reunification support. You can report a missing or found person with photo, last seen location, and contact details. Our team matches reports with Edhi shelter records.',
-        quickSuggestions: ['Report Missing Person', 'Call Helpline 115'],
-      );
-    }
-
-    // Greeting
-    if (lower.contains('hello') ||
-        lower.contains('hi') ||
-        lower.contains('salam') ||
-        lower.contains('hey')) {
-      return const ChatbotReply(
-        text:
-            'Assalam-o-Alaikum! I am your **EdhiConnect AI Assistant**. I can help guide you with emergency ambulance requests, blood donation coordination, charity campaigns, first-aid instructions, and finding nearby Edhi relief centers.',
-        quickSuggestions: [
-          'How to request an ambulance?',
-          'Register as Blood Donor',
-          'Donate to Flood Relief',
-          'Nearby Edhi Centers',
-        ],
-      );
-    }
-
-    // General fallback
-    return const ChatbotReply(
-      text:
-          'Thank you for reaching out to EdhiConnect AI. I can assist you with emergency response protocols, ambulance dispatch, blood requests, donations, and finding Edhi welfare centers. How can I assist you today?',
-      quickSuggestions: [
-        'Request Emergency Help',
-        'Blood Bank Registry',
-        'Make a Donation',
-        'Call Edhi 115',
-      ],
-    );
-  }
+  static ChatbotReply getChatbotResponse(
+    String message, {
+    List<String> history = const [],
+  }) => WelfareKnowledgeService.answer(message, history: history);
 }

@@ -8,9 +8,11 @@ import 'services/firestore_service.dart';
 import 'services/notification_service.dart';
 import 'services/app_preferences_service.dart';
 import 'features/auth/auth_wrapper.dart';
+import 'services/welfare_knowledge_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  WelfareKnowledgeService.initialize();
 
   // Initialize Firebase if configured, otherwise run in offline demo mode
   if (DefaultFirebaseOptions.isConfigured) {

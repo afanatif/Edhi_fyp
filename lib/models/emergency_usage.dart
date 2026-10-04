@@ -10,10 +10,12 @@ class EmergencyUsage {
   final int cancellationCount;
   final DateTime? windowStartedAt;
   final DateTime? banStartedAt;
+  final bool adminBanned;
   const EmergencyUsage({
     this.cancellationCount = 0,
     this.windowStartedAt,
     this.banStartedAt,
+    this.adminBanned = false,
   });
 
   factory EmergencyUsage.fromMap(Map<String, dynamic> map) {
@@ -26,11 +28,12 @@ class EmergencyUsage {
       cancellationCount: (map['cancellationCount'] as num?)?.toInt() ?? 0,
       windowStartedAt: date(map['windowStartedAt']),
       banStartedAt: date(map['banStartedAt']),
+      adminBanned: map['adminBanned'] == true,
     );
   }
   DateTime? get bannedUntil => banStartedAt?.add(banDuration);
   bool isBanned(DateTime now) =>
-      bannedUntil != null && now.isBefore(bannedUntil!);
+      adminBanned || (bannedUntil != null && now.isBefore(bannedUntil!));
   bool startsNewWindow(DateTime now) =>
       windowStartedAt == null ||
       !now.isBefore(windowStartedAt!.add(countingWindow));

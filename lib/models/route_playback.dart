@@ -63,6 +63,15 @@ class RoutePlayback {
             .clamp(0.0, 1.0);
   bool movingAt(DateTime now) =>
       enabled && pausedAt == null && points.length > 1 && progressAt(now) < 1;
+  DateTime get arrivalDueAt => startedAt.add(
+    Duration(milliseconds: (durationSeconds * 1000).ceil() + 5000),
+  );
+  bool arrivalReadyAt(DateTime now) =>
+      enabled &&
+      pausedAt == null &&
+      stoppedAt == null &&
+      points.isNotEmpty &&
+      !now.isBefore(arrivalDueAt);
   double get distanceMeters => points.isEmpty ? 0 : _distances.last;
   double remainingSecondsAt(DateTime now) =>
       durationSeconds * (1 - progressAt(now));

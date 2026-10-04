@@ -61,7 +61,7 @@ A journey is identified by the unit ID and linked to the request ID. It stores r
 
 RoutePlayback computes cumulative segment distances, then locates the corresponding position and heading along the path. Clients consuming the same record use the same inputs for their map view.
 
-HQ controls journey settings and reconciles arrival. Citizen and driver reads are scoped to the associated mission. Pausing freezes progress; a terminal stop freezes the final state.
+HQ controls journey settings. An authorized citizen or assigned driver can also reconcile arrival five seconds after the saved journey endpoint, without an admin session. Server-time rules check the complete transaction. Citizen and driver reads are scoped to the associated mission. Pausing freezes progress; a terminal stop freezes the final state. An optional Cloud Tasks worker supports arrival while all clients are closed; see [arrival and administration updates](ARRIVAL_ADMIN_AND_CHATBOT_UPDATES.md).
 
 The map view and the availability state are coordinated but distinct: arrival does not free a unit by itself.
 

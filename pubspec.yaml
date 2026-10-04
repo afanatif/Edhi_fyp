@@ -71,6 +71,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/images/edhiconnect_logo_v1.png
+    - assets/knowledge/welfare_sources.json
 
   # To add assets to your application, add an assets section, like this:
   # assets:
