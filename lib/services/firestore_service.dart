@@ -29,6 +29,7 @@ import 'ai_triage_service.dart';
 import 'welfare_knowledge_service.dart';
 import 'location_service.dart';
 import 'route_service.dart';
+import 'chat_context_service.dart';
 
 class NearestAmbulanceResult {
   final Employee employee;
@@ -3286,9 +3287,81 @@ class FirestoreService extends ChangeNotifier {
     }
     final threadId = _chatThreadId;
     await WelfareKnowledgeService.initialize();
-    final history = _chatHistory[threadId] ?? [];
+    final history = ChatContextService.topicHistory(
+      cleanText,
+      _chatHistory[threadId] ?? [],
+    );
+    final missingIntent = ChatContextService.hasMissingIntent(
+      cleanText,
+      history: history,
+    );
+    final requestStatus = ChatContextService.wantsRequestStatus(
+      cleanText,
+      history: history,
+    );
+    final bloodNeedsIntent = ChatContextService.wantsBloodNeeds(
+      cleanText,
+      history: history,
+    );
+    List<Map<String, dynamic>>? bloodNeeds;
+    List<MissingPersonReport>? missingReports;
+    List<EmergencyRequest>? ownRequests;
+    if (missingIntent) {
+      if (isLiveFirebase) {
+        try {
+          final saved = await _firestore!
+              .collection('missing_persons')
+              .orderBy('reportedAt', descending: true)
+              .limit(100)
+              .get()
+              .timeout(const Duration(seconds: 2));
+          missingReports = saved.docs
+              .map(MissingPersonReport.fromFirestore)
+              .toList();
+        } catch (_) {
+          /* Failed lookup is not an empty result. */
+        }
+      } else {
+        missingReports = List.of(_mockMissingPersons);
+      }
+    }
+    if (requestStatus) {
+      if (isLiveFirebase) {
+        try {
+          final saved = await _firestore!
+              .collection('emergency_requests')
+              .where('userId', isEqualTo: threadId)
+              .limit(30)
+              .get()
+              .timeout(const Duration(seconds: 2));
+          ownRequests = saved.docs.map(EmergencyRequest.fromFirestore).toList();
+        } catch (_) {
+          /* Keep failed lookups distinct from no open request. */
+        }
+      } else {
+        ownRequests = _mockRequests.where((r) => r.userId == threadId).toList();
+      }
+    }
+    if (bloodNeedsIntent) {
+      if (isLiveFirebase) {
+        try {
+          final saved = await _firestore!
+              .collection('blood_needs')
+              .orderBy('createdAt', descending: true)
+              .limit(50)
+              .get()
+              .timeout(const Duration(seconds: 2));
+          bloodNeeds = saved.docs.map((d) => d.data()).toList();
+        } catch (_) {
+          /* Do not invent availability when a lookup fails. */
+        }
+      } else {
+        bloodNeeds = _mockBloodNeeds.map((n) => n.toMap()).toList();
+      }
+    }
     List<BloodDonor>? donors;
-    if (WelfareKnowledgeService.hasBloodIntent(cleanText, history: history)) {
+    if (!bloodNeedsIntent &&
+        WelfareKnowledgeService.hasBloodIntent(cleanText, history: history)) {
       if (isLiveFirebase) {
         try {
           Query<Map<String, dynamic>> query = _firestore!.collection(
@@ -3302,7 +3375,7 @@ class FirestoreService extends ChangeNotifier {
             query = query.where('bloodGroup', isEqualTo: group);
           }
           final result = await query
-              .limit(50)
+              .limit(100)
               .get()
               .timeout(const Duration(seconds: 2));
           donors = result.docs.map(BloodDonor.fromFirestore).toList();
@@ -3313,11 +3386,32 @@ class FirestoreService extends ChangeNotifier {
         donors = List.of(_mockBloodDonors);
       }
     }
-    final botReply = WelfareKnowledgeService.answer(
+    final guide = WelfareKnowledgeService.answer(
       cleanText,
       history: history,
       donors: donors,
     );
+    final botReply = guide.isEmergencyIntent
+        ? guide
+        : missingIntent
+        ? ChatContextService.missingReply(
+            cleanText,
+            history: history,
+            reports: missingReports,
+            city: WelfareKnowledgeService.cityFor(cleanText, history: history),
+          )
+        : requestStatus
+        ? ChatContextService.requestReply(ownRequests)
+        : bloodNeedsIntent
+        ? ChatContextService.bloodNeedsReply(
+            bloodNeeds,
+            group: WelfareKnowledgeService.bloodGroupFor(
+              cleanText,
+              history: history,
+            ),
+            city: WelfareKnowledgeService.cityFor(cleanText, history: history),
+          )
+        : guide;
 
     final userMsg = ChatMessage(
       messageId: _newRecordId('MSG'),

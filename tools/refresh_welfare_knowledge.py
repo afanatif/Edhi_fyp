@@ -15,19 +15,11 @@ import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'assets' / 'knowledge' / 'welfare_sources.json'
-HOSTS = {'www.edhi.org', 'edhi.org', 'www.chhipa.org', 'chhipa.org'}
+HOSTS = {'www.edhi.org', 'edhi.org'}
 PAGES = [
     ('Edhi', 'https://www.edhi.org/' + path)
     for path in ['about-us', 'ambulance', 'children', 'educational', 'graveyard',
                  'contact-us', 'punjab', 'sindh', 'kpk', 'zakat', 'sadqa']
-] + [
-    ('Chhipa', 'https://www.chhipa.org/' + path)
-    for path in ['about-us/', 'contact-us/', 'services/chhipa-ambulance/',
-                 'services/chhipa-dastarkhawan/', 'services/chhipa-home-orphanage/',
-                 'services/chhipa-old-home/', 'services/chhipa-women-shelter-home/',
-                 'services/chhipa-ration/', 'services/chhipa-morgue/',
-                 'services/chhipa-jhoola/', 'services/chhipa-new-born-baby/',
-                 'how-to-donate/donate-via-jazzcash/', 'how-to-donate/donate-via-easypaisa/']
 ]
 
 class SafeRedirect(urllib.request.HTTPRedirectHandler):

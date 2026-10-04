@@ -69,16 +69,21 @@ void main() {
     expect(usage.cancellationCount, 3);
     expect(usage.afterCancellation(now).cancellationCount, 1);
   });
-  test('Organization questions, typos and greetings are distinguished', () {
-    final chhipa = WelfareKnowledgeService.answer('Chipa ambulance number');
-    expect(chhipa.text, contains('1020'));
-    expect(chhipa.text, isNot(contains('Assalam')));
-    expect(chhipa.isEmergencyIntent, false);
-    expect(chhipa.sourceUrls.single, contains('chhipa.org'));
-    expect(WelfareKnowledgeService.answer('hello').text, contains('Assalam'));
+  test('Organization queries are redirected into app workflows', () {
+    for (final message in [
+      'Chipa ambulance number',
+      'Edhi ambulanse services',
+    ]) {
+      final reply = WelfareKnowledgeService.answer(message);
+      expect(reply.text, contains('Emergency Request'));
+      expect(reply.text, isNot(contains('Chhipa')));
+      expect(reply.text, isNot(contains('Edhi')));
+      expect(reply.sourceUrls, isEmpty);
+      expect(reply.isEmergencyIntent, false);
+    }
     expect(
-      WelfareKnowledgeService.answer('Edhi ambulanse services').text,
-      contains('115'),
+      WelfareKnowledgeService.answer('hello').quickSuggestions,
+      contains('Open Blood Bank'),
     );
   });
   test(
@@ -110,7 +115,7 @@ void main() {
       final reply = WelfareKnowledgeService.answer(message);
       expect(reply.isEmergencyIntent, true, reason: message);
       expect(reply.text, contains('115'));
-      expect(reply.text, contains('1020'));
+      expect(reply.text, contains('Emergency Request'));
     }
     expect(
       WelfareKnowledgeService.answer('mujhe khoon donor chahiye').text,
@@ -118,22 +123,22 @@ void main() {
     );
   });
   test(
-    'Provider follow-up stays in context and unknown facts are admitted',
+    'Service follow-up stays in the app and unknown availability is not invented',
     () {
       expect(
         WelfareKnowledgeService.answer(
           'what about their number?',
           history: ['Chhipa ambulance'],
         ).text,
-        contains('1020'),
+        contains('Emergency Request'),
       );
       expect(
         WelfareKnowledgeService.answer('Chhipa charges today').text,
-        contains('cannot verify'),
+        contains('cannot confirm'),
       );
       expect(
         WelfareKnowledgeService.answer('quantum rocket engines').text,
-        contains('outside this welfare assistant'),
+        contains('through this app'),
       );
     },
   );
@@ -143,7 +148,7 @@ void main() {
     for (var i = 0; i < 25; i++) {
       expect(
         WelfareKnowledgeService.answer('Chhipa ambulance number').text,
-        contains('1020'),
+        contains('Emergency Request'),
       );
     }
     timer.stop();

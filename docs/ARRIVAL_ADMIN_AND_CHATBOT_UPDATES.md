@@ -61,3 +61,14 @@ Chatbot replies no longer display source labels or links. Existing stored replie
 The donation form currently records wallet/bank transaction references with `AwaitingVerification`; selecting Easypaisa or JazzCash does not initiate a payment. The simplest extension is an authorized recipient's merchant QR or bank/Raast transfer with manual admin verification. JazzCash offers [QR/Raast acceptance](https://www.jazzcash.com.pk/business/), and Easypaisa offers [merchant QR services](https://merchantportal.easypaisa.com.pk/).
 
 For automatic confirmation, obtain approved credentials from [Easypaisa business onboarding](https://registerbusiness.easypaisa.com.pk/) or the [JazzCash merchant sandbox](https://sandbox.jazzcash.com.pk/MerchantDashboard). Implement server-created payment references, hosted checkout, authenticated response verification and idempotent donation updates. Keep merchant passwords/signing keys on the server; a client success screen or typed reference is not proof of payment. No payment gateway has been activated in this change.
+
+
+## App-only assistant update
+
+Chat replies now use implemented app workflows exclusively. The bundled organization corpus remains internal reference material; organization descriptions, names, links and source labels are excluded from generated replies. Older provider replies and suggestion chips are adapted when displayed. The chatbot gives English, Roman Urdu and Urdu app guidance and keeps blood-group, city and donor availability matching.
+
+Open shortcuts navigate to Emergency Request, Home, Blood Bank, Donations, Missing Persons, Profile, First Aid, Centers and SOS Contacts. Blood guidance uses the actual Donate, Donors, Requests and Post Need controls. Payment replies describe transaction-reference verification without claiming to initiate a charge. The wipe feature remains at its previous implementation; no complete-reset backend was retained or deployed.
+
+## Context from current app records
+
+The chatbot checks available donor listings (up to 100 records), recent missing-person reports (up to 100), active blood requests (up to 50) and the signed-in user's own ambulance requests (up to 30). It reports counts within the records checked, filters group/city/name/status where appropriate, and distinguishes a failed lookup from an empty result. It retains relevant follow-up context and drops unrelated details when the topic changes. No creation or image-attachment workflow was added to chat; buttons open the existing app screens. Chhipa documents and refresh targets were removed from the bundled reference corpus. Existing historical provider mentions remain filtered when displayed.

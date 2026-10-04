@@ -28,7 +28,8 @@ import '../../../core/widgets/contact_actions.dart';
 import '../../../core/widgets/current_location_display.dart';
 
 class UserHomeScreen extends StatefulWidget {
-  const UserHomeScreen({super.key});
+  final bool openEmergencyRequest;
+  const UserHomeScreen({super.key, this.openEmergencyRequest = false});
 
   @override
   State<UserHomeScreen> createState() => _UserHomeScreenState();
@@ -37,6 +38,16 @@ class UserHomeScreen extends StatefulWidget {
 class _UserHomeScreenState extends State<UserHomeScreen> {
   int _bottomNavIndex = 0;
   RequestLocation? _currentLocation;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.openEmergencyRequest) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _triggerSosQuickSheet(context);
+      });
+    }
+  }
 
   void _triggerSosQuickSheet(BuildContext context, [String? initialCategory]) {
     showModalBottomSheet(

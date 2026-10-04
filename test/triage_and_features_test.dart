@@ -76,7 +76,7 @@ void main() {
       );
       expect(reply.isEmergencyIntent, isTrue);
       expect(reply.text, contains('115'));
-      expect(reply.text, contains('1020'));
+      expect(reply.text, contains('Emergency Request'));
       expect(reply.text, contains('now'));
     });
 

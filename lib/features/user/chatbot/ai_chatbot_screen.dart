@@ -8,6 +8,14 @@ import '../../../models/chat_message.dart';
 import '../../../services/welfare_knowledge_service.dart';
 import '../../../core/widgets/skeleton_loader.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../home/user_home_screen.dart';
+import '../blood_bank/blood_bank_screen.dart';
+import '../donations/donations_screen.dart';
+import '../missing_persons/missing_persons_screen.dart';
+import '../profile/user_profile_screen.dart';
+import '../quick_help/first_aid_screen.dart';
+import '../quick_help/edhi_centers_screen.dart';
+import '../quick_help/emergency_contacts_sheet.dart';
 
 class AIChatbotScreen extends StatefulWidget {
   const AIChatbotScreen({super.key});
@@ -21,8 +29,56 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
   final ScrollController _scrollController = ScrollController();
   bool _isSending = false;
 
+  void _selectSuggestion(String text) {
+    if (text == 'Open SOS Contacts') {
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => const EmergencyContactsSheet(),
+      );
+      return;
+    }
+    final Widget? screen = switch (text) {
+      'Open Emergency Request' => const UserHomeScreen(
+        openEmergencyRequest: true,
+      ),
+      'Open Home' => const UserHomeScreen(),
+      'Open Blood Bank' => const BloodBankScreen(),
+      'Open Donations' => const DonationsScreen(),
+      'Open Missing Persons' => const MissingPersonsScreen(),
+      'Open Profile' => const UserProfileScreen(),
+      'Open First Aid' => const FirstAidScreen(),
+      'Open Centers' => const EdhiCentersScreen(),
+      _ => null,
+    };
+    if (screen == null) {
+      _sendMessage(text);
+    } else {
+      final embedded = {
+        'Open Blood Bank',
+        'Open Donations',
+        'Open Profile',
+      }.contains(text);
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => embedded
+              ? Scaffold(
+                  appBar: AppBar(title: Text(text.substring(5))),
+                  body: screen,
+                )
+              : screen,
+        ),
+      );
+    }
+  }
+
   final List<String> _defaultChips = [
     'How do I request an ambulance?',
+    'Available blood donors',
+    'Missing person reports',
+    'Blood requests available',
     'Find Nearest Center',
     'Register as Blood Donor',
     'How to donate ration/food?',
@@ -90,39 +146,44 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
               ),
             ),
             const SizedBox(width: 10),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'EdhiConnect AI Assistant',
-                  style: GoogleFonts.outfit(
-                    fontSize: 16.5,
-                    fontWeight: FontWeight.w800,
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'App Assistant',
+                    style: GoogleFonts.outfit(
+                      fontSize: 16.5,
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
-                ),
-                Row(
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: const BoxDecoration(
-                        color: AppColors.reliefGreenGlow,
-                        shape: BoxShape.circle,
+                  Row(
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: const BoxDecoration(
+                          color: AppColors.reliefGreenGlow,
+                          shape: BoxShape.circle,
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      'Fast welfare assistance',
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                        fontWeight: FontWeight.w500,
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          'App records and helpful guidance',
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.inter(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -247,7 +308,7 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                                   Text(
                                     isEmergency
                                         ? 'CRITICAL DISPATCH NOTICE'
-                                        : 'Edhi Welfare AI',
+                                        : 'App Assistant',
                                     style: GoogleFonts.outfit(
                                       fontSize: 11.5,
                                       fontWeight: FontWeight.w800,
@@ -282,16 +343,21 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                               Wrap(
                                 spacing: 6,
                                 runSpacing: 6,
-                                children: msg.quickSuggestions
-                                    .map(
-                                      (suggestion) => ActionChip(
-                                        label: Text(suggestion),
-                                        onPressed: _isSending
-                                            ? null
-                                            : () => _sendMessage(suggestion),
-                                      ),
-                                    )
-                                    .toList(),
+                                children:
+                                    WelfareKnowledgeService.displaySuggestions(
+                                          msg.quickSuggestions,
+                                        )
+                                        .map(
+                                          (suggestion) => ActionChip(
+                                            label: Text(suggestion),
+                                            onPressed: _isSending
+                                                ? null
+                                                : () => _selectSuggestion(
+                                                    suggestion,
+                                                  ),
+                                          ),
+                                        )
+                                        .toList(),
                               ),
                             ],
                             if (isEmergency && !isUser) ...[
@@ -347,7 +413,9 @@ class _AIChatbotScreenState extends State<AIChatbotScreen> {
                                         color: AppColors.emergencyRed,
                                       ),
                                     ),
-                                    onPressed: () => Navigator.pop(context),
+                                    onPressed: () => _selectSuggestion(
+                                      'Open Emergency Request',
+                                    ),
                                   ),
                                 ],
                               ),
