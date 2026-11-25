@@ -30,16 +30,24 @@ import 'welfare_knowledge_service.dart';
 import 'location_service.dart';
 import 'route_service.dart';
 import 'chat_context_service.dart';
+import '../models/dispatch_offer.dart';
+import '../core/constants/pakistan_cities.dart';
+
+part 'firestore_dispatch_offers.dart';
 
 class NearestAmbulanceResult {
   final Employee employee;
   final double distanceKm;
   final int etaMinutes;
 
+  /// True when the driver was offered the job and must accept within 60 s.
+  final bool awaitingAcknowledgement;
+
   const NearestAmbulanceResult({
     required this.employee,
     required this.distanceKm,
     required this.etaMinutes,
+    this.awaitingAcknowledgement = false,
   });
 }
 
@@ -73,6 +81,9 @@ class UrgentBloodNeed {
   final String userId;
   final String status;
 
+  /// City of the hospital ('' for older records).
+  final String city;
+
   bool isOwnedBy(String id) => id.isNotEmpty && id == userId;
 
   const UrgentBloodNeed({
@@ -86,6 +97,7 @@ class UrgentBloodNeed {
     this.userId = '',
     this.status = 'active',
     required this.createdAt,
+    this.city = '',
   });
 
   factory UrgentBloodNeed.fromMap(Map<String, dynamic> map, {String? docId}) {
@@ -104,6 +116,7 @@ class UrgentBloodNeed {
       userId: map['userId']?.toString() ?? '',
       status: map['status']?.toString() ?? 'active',
       createdAt: createdAt,
+      city: map['city']?.toString() ?? '',
     );
   }
 
@@ -118,18 +131,23 @@ class UrgentBloodNeed {
     'userId': userId,
     'status': status,
     'createdAt': Timestamp.fromDate(createdAt),
+    'city': city,
   };
 }
 
 class FirestoreService extends ChangeNotifier {
   /// Fleet playback is managed by Operations.
   static const simulatedFleetEnabled = true;
+  static const offersCollection = 'dispatch_offers';
   final bool automaticSimulation;
   final Future<RoadRouteResult> Function(LatLng, LatLng) _roadLoader;
   final Future<LatLng> Function(LatLng) _roadSnapper;
   final DateTime Function() _now;
   FirebaseFirestore? _firestore;
   int _localIdSequence = 0;
+
+  /// The service clock (injectable in tests); UI countdowns use it too.
+  DateTime get clockNow => _now();
 
   bool get isLiveFirebase =>
       DefaultFirebaseOptions.isConfigured && _firestore != null;
@@ -182,6 +200,20 @@ class FirestoreService extends ChangeNotifier {
   final StreamController<List<AuditEvent>> _auditController =
       StreamController<List<AuditEvent>>.broadcast();
   final Map<String, StreamSubscription<LatLng>> _liveLocationSubscriptions = {};
+
+  // Driver acknowledgement offers (see firestore_dispatch_offers.dart).
+  final List<DispatchOffer> _mockOffers = [];
+  final Map<String, DispatchOffer> _liveOffers = {};
+  final Map<String, EmergencyRequest> _ownOpenRequests = {};
+  final Map<String, DateTime> _offerRetryAt = {};
+  final StreamController<List<DispatchOffer>> _offersController =
+      StreamController<List<DispatchOffer>>.broadcast();
+  StreamSubscription? _offersSub;
+  StreamSubscription? _ownRequestsSub;
+  bool _offerLoopBusy = false;
+  void _notifyOfferListeners() {
+    if (!_disposed) notifyListeners();
+  }
 
   int get pendingSyncCount => _pendingEmergencyWrites.length;
   bool isRequestQueued(String requestId) =>
@@ -239,6 +271,11 @@ class FirestoreService extends ChangeNotifier {
     _centersSub?.cancel();
     _demoSub?.cancel();
     _simulationRequestsSub?.cancel();
+    _offersSub?.cancel();
+    _ownRequestsSub?.cancel();
+    _liveOffers.clear();
+    _ownOpenRequests.clear();
+    _offerRetryAt.clear();
     _simulationRequests.clear();
     _simulationErrors.clear();
     _autoDispatchRetryAt.clear();
@@ -404,6 +441,8 @@ class FirestoreService extends ChangeNotifier {
           );
     }
 
+    _listenToDispatchOffers();
+
     _centersSub?.cancel();
     _centersSub = _firestore!
         .collection('edhi_centers')
@@ -420,6 +459,53 @@ class FirestoreService extends ChangeNotifier {
             debugPrint('Firestore live centers stream notice: $err');
           },
         );
+  }
+
+  void _listenToDispatchOffers() {
+    final uid = _sessionUserId;
+    if (_firestore == null || uid == null) return;
+    Query<Map<String, dynamic>> offers = _firestore!.collection(
+      offersCollection,
+    );
+    if (_sessionRole == AppRoles.admin) {
+      offers = offers.orderBy('offeredAt', descending: true).limit(800);
+    } else if (_sessionRole == AppRoles.employee) {
+      offers = offers.where('driverUserId', isEqualTo: uid);
+    } else {
+      offers = offers.where('requestUserId', isEqualTo: uid);
+    }
+    _offersSub?.cancel();
+    _offersSub = offers.snapshots().listen((snapshot) {
+      _liveOffers
+        ..clear()
+        ..addEntries(
+          snapshot.docs.map(
+            (doc) => MapEntry(doc.id, DispatchOffer.fromFirestore(doc)),
+          ),
+        );
+      _broadcastOffers();
+      _ensureDemoTicker();
+    }, onError: (Object error) => debugPrint('Dispatch offers: $error'));
+    if (_sessionRole == AppRoles.user) {
+      _ownRequestsSub?.cancel();
+      _ownRequestsSub = _firestore!
+          .collection(AppConstants.requestsCollection)
+          .where('userId', isEqualTo: uid)
+          .snapshots()
+          .listen((snapshot) {
+            _ownOpenRequests.clear();
+            for (final doc in snapshot.docs) {
+              final request = EmergencyRequest.fromFirestore(doc);
+              if (const [
+                EmergencyStatus.pending,
+                EmergencyStatus.approved,
+              ].contains(request.status)) {
+                _ownOpenRequests[request.requestId] = request;
+              }
+            }
+            if (_ownOpenRequests.isNotEmpty) _ensureDemoTicker();
+          }, onError: (Object error) => debugPrint('Own requests: $error'));
+    }
   }
 
   /// Purges sample/mock documents from Firestore
@@ -1145,28 +1231,34 @@ class FirestoreService extends ChangeNotifier {
         ? req.location.longitude
         : LocationService.defaultLocation.longitude;
 
+    if (req.hasOffer &&
+        req.offerAt != null &&
+        _now().isBefore(req.offerAt!.add(DispatchOffer.window))) {
+      return null; // A driver is still being asked.
+    }
     final destination = LatLng(reqLat, reqLng);
-    final candidates =
-        getAvailableDrivers().where((e) => e.hasValidLocation).toList()..sort(
-          (a, b) =>
-              const Distance()(
-                LatLng(a.currentLat, a.currentLng),
-                destination,
-              ).compareTo(
-                const Distance()(
-                  LatLng(b.currentLat, b.currentLng),
-                  destination,
-                ),
-              ),
-        );
+    final request = req;
+    // Non-HQ apps can only offer to units that have a driver to press Accept;
+    // driverless units are started by HQ, which can create their road route.
+    final linkedOnly = isLiveFirebase && _sessionRole != AppRoles.admin;
+    final candidates = offerCandidates(request, linkedOnly: linkedOnly);
+    if (candidates.isEmpty) {
+      final anyFree = getAvailableDrivers().any(
+        (e) => e.hasValidLocation && (!linkedOnly || e.needsAcknowledgement),
+      );
+      if (anyFree && request.skippedEmployeeIds.isNotEmpty) {
+        // Everyone nearby already passed: alert HQ and ask again, nearest first.
+        await _restartOfferRound(request);
+      }
+      return null;
+    }
     Object? lastError;
     for (final candidate in candidates) {
       try {
-        await assignRequest(
-          requestId: requestId,
-          employeeId: candidate.employeeId,
-          employeeName: '${candidate.name} (${candidate.vehicleNumber})',
-        );
+        final result = await dispatchToUnit(requestId, candidate);
+        if (result.awaitingAcknowledgement) {
+          return result;
+        }
         final distance = const Distance().as(
           LengthUnit.Kilometer,
           LatLng(candidate.currentLat, candidate.currentLng),
@@ -1184,13 +1276,16 @@ class FirestoreService extends ChangeNotifier {
               1,
         );
       } catch (error) {
-        // Another admin may have reserved this unit or completed this request.
+        // Another client may have reserved this unit or changed this request.
         final current = await getRequestStream(requestId).first;
         if (current == null ||
             ![
               EmergencyStatus.pending,
               EmergencyStatus.approved,
-            ].contains(current.status)) {
+            ].contains(current.status) ||
+            (current.hasOffer &&
+                current.offerAt != null &&
+                _now().isBefore(current.offerAt!.add(DispatchOffer.window)))) {
           return null;
         }
         lastError = error;
@@ -1253,6 +1348,9 @@ class FirestoreService extends ChangeNotifier {
         }
         if (_autoDispatchRetryAt[request.requestId]?.isAfter(_now()) == true) {
           continue;
+        }
+        if (request.hasOffer) {
+          continue; // Waiting for a driver to answer; timeouts move it on.
         }
         try {
           await autoDispatchNearestAmbulance(request.requestId);
@@ -1342,6 +1440,17 @@ class FirestoreService extends ChangeNotifier {
           : null,
       isVerified: fraudAssessment.score < 0.30,
       createdAt: _now(),
+      city: request.city.isNotEmpty
+          ? PakistanCities.normalize(request.city)
+          : PakistanCities.fromLocation(
+              request.location.latitude,
+              request.location.longitude,
+              address: request.location.address,
+            ),
+      clearOffer: true,
+      offerAttempts: 0,
+      skippedEmployeeIds: const [],
+      dispatchAlert: false,
     );
 
     if (isLiveFirebase) {
@@ -1570,6 +1679,9 @@ class FirestoreService extends ChangeNotifier {
     if (employeeId != null) {
       _pendingTransitStarts.remove(employeeId);
     }
+    if (isLiveFirebase) {
+      await _closeOffersFor(requestId);
+    }
     _broadcastAll();
     return result;
   }
@@ -1741,6 +1853,10 @@ class FirestoreService extends ChangeNotifier {
             status == EmergencyStatus.cancelled)) {
       _pendingTransitStarts.remove(assignedEmployeeId);
     }
+    if (status == EmergencyStatus.cancelled ||
+        status == EmergencyStatus.completed) {
+      await _closeOffersFor(requestId);
+    }
     _notificationService?.sendNotification(
       userId: userId,
       title: 'Dispatch update',
@@ -1871,6 +1987,12 @@ class FirestoreService extends ChangeNotifier {
         '${driver.name} is currently ${driver.status}. Select another unit.',
       );
     }
+    if (driver.hasLiveOffer(_now()) &&
+        driver.pendingOfferRequestId != requestId) {
+      throw StateError(
+        '${driver.name} is answering another emergency offer. Select another unit.',
+      );
+    }
 
     // Obtain a usable road route BEFORE reserving either request or ambulance.
     // A routing failure must not leave a busy unit stuck on an assigned job.
@@ -1915,6 +2037,7 @@ class FirestoreService extends ChangeNotifier {
             currentDriver.data()?['role'] != 'driver') {
           throw StateError('This driver is no longer available.');
         }
+        final staleOfferId = data['offerId'] as String?;
         transaction.update(requestRef, {
           'status': automaticSimulation
               ? EmergencyStatus.inProgress
@@ -1922,12 +2045,28 @@ class FirestoreService extends ChangeNotifier {
           'assignedEmployeeId': employeeId,
           'assignedEmployeeName': employeeName,
           'assignedDriverUserId': currentDriver.data()?['userId'],
+          'offerId': null,
+          'offerEmployeeId': null,
+          'offerAt': null,
+          'acceptedAt': FieldValue.serverTimestamp(),
           'updatedAt': FieldValue.serverTimestamp(),
         });
         transaction.update(driverRef, {
           'status': 'busy',
           'activeRequestId': requestId,
+          'pendingOfferRequestId': '',
+          'pendingOfferAt': null,
         });
+        if (staleOfferId != null && staleOfferId.isNotEmpty) {
+          // HQ overrode a waiting offer: close it without a penalty.
+          transaction.update(
+            _firestore!.collection(offersCollection).doc(staleOfferId),
+            {
+              'outcome': DispatchOffer.cancelled,
+              'respondedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        }
         // New shared journey replaces the previous patient's route atomically.
         transaction.set(_firestore!.collection('route_demos').doc(employeeId), {
           'requestId': requestId,
@@ -1967,8 +2106,27 @@ class FirestoreService extends ChangeNotifier {
               : EmergencyStatus.assigned,
           assignedEmployeeId: employeeId,
           assignedEmployeeName: employeeName,
+          clearOffer: true,
+          acceptedAt: _now(),
           updatedAt: DateTime.now(),
         );
+        for (var i = 0; i < _mockOffers.length; i++) {
+          if (_mockOffers[i].requestId == requestId &&
+              _mockOffers[i].isPending) {
+            _mockOffers[i] = _mockOffers[i].copyWith(
+              outcome: DispatchOffer.cancelled,
+              respondedAt: _now(),
+            );
+            final other = _mockEmployees.indexWhere(
+              (e) => e.employeeId == _mockOffers[i].employeeId,
+            );
+            if (other != -1) {
+              _mockEmployees[other] = _mockEmployees[other].copyWith(
+                clearOffer: true,
+              );
+            }
+          }
+        }
 
         // Mark assigned driver as busy
         final empIdx = _mockEmployees.indexWhere(
@@ -1978,6 +2136,7 @@ class FirestoreService extends ChangeNotifier {
           _mockEmployees[empIdx] = _mockEmployees[empIdx].copyWith(
             status: 'busy',
             activeRequestId: requestId,
+            clearOffer: true,
           );
         }
         if (automaticSimulation) {
@@ -2092,6 +2251,7 @@ class FirestoreService extends ChangeNotifier {
         !automaticSimulation) {
       return;
     }
+    await advanceDispatchOffers();
     if (!isLiveFirebase || _sessionRole == AppRoles.admin) {
       await _repairLegacyAssignmentLinks();
       await dispatchQueuedRequests();
@@ -2909,14 +3069,17 @@ class FirestoreService extends ChangeNotifier {
         donation.transactionReference.trim().length < 6) {
       throw ArgumentError('Enter the payment transaction/reference ID.');
     }
-    if (donation.transactionReference.trim().isNotEmpty) {
+    if (donation.transactionReference.trim().isNotEmpty && !isLiveFirebase) {
       final duplicate = _mockDonations.any(
         (item) =>
+            item.paymentMethod == donation.paymentMethod &&
             item.transactionReference.toLowerCase() ==
-            donation.transactionReference.trim().toLowerCase(),
+                donation.transactionReference.trim().toLowerCase(),
       );
       if (duplicate) {
-        throw StateError('This payment reference has already been submitted.');
+        throw StateError(
+          'This Transaction ID has already been submitted. Each payment can be claimed once.',
+        );
       }
     }
 
@@ -2931,10 +3094,37 @@ class FirestoreService extends ChangeNotifier {
     );
 
     if (isLiveFirebase) {
-      await _firestore!
-          .collection('donations')
-          .doc(donationId)
-          .set(newDonation.toMap());
+      final db = _firestore!;
+      final batch = db.batch();
+      batch.set(
+        db.collection('donations').doc(donationId),
+        newDonation.toMap(),
+      );
+      final tid = newDonation.transactionReference.trim();
+      if (tid.isNotEmpty) {
+        // One lock document per payment: a second claim of the same TID is an
+        // update, which the rules refuse, so the whole batch fails.
+        batch.set(
+          db
+              .collection(paymentRefsCollection)
+              .doc(paymentRefId(newDonation.paymentMethod, tid)),
+          {
+            'userId': newDonation.userId,
+            'donationId': donationId,
+            'createdAt': FieldValue.serverTimestamp(),
+          },
+        );
+      }
+      try {
+        await batch.commit();
+      } on FirebaseException catch (error) {
+        if (tid.isNotEmpty && error.code == 'permission-denied') {
+          throw StateError(
+            'This Transaction ID has already been submitted. Each payment can be claimed once.',
+          );
+        }
+        rethrow;
+      }
     } else {
       _mockDonations.insert(0, newDonation);
       _broadcastAll();
@@ -2958,6 +3148,52 @@ class FirestoreService extends ChangeNotifier {
     );
 
     return donationId;
+  }
+
+  static const paymentRefsCollection = 'payment_refs';
+
+  /// Lock id for a provider's transaction, e.g. "easypaisa_39124455019".
+  static String paymentRefId(String provider, String tid) =>
+      '${provider.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '')}_${tid.toUpperCase()}';
+
+  /// HQ rejects a payment it could not find in the account statement.
+  Future<void> rejectDonation(String donationId, String reason) async {
+    final note = reason.trim().isEmpty
+        ? 'Transaction ID not found in the account.'
+        : reason.trim();
+    String userId = '';
+    if (isLiveFirebase) {
+      final ref = _firestore!.collection('donations').doc(donationId);
+      userId = (await ref.get()).data()?['userId'] as String? ?? '';
+      await ref.update({
+        'status': 'Rejected',
+        'paymentStatus': 'Rejected',
+        'reviewNote': note,
+      });
+    } else {
+      final idx = _mockDonations.indexWhere((d) => d.donationId == donationId);
+      if (idx == -1) throw StateError('Donation no longer exists.');
+      userId = _mockDonations[idx].userId;
+      _mockDonations[idx] = _mockDonations[idx].copyWith(
+        status: 'Rejected',
+        paymentStatus: 'Rejected',
+        reviewNote: note,
+      );
+      _broadcastAll();
+    }
+    _notificationService?.sendNotification(
+      userId: userId,
+      title: 'Payment not confirmed (#$donationId)',
+      message: '$note If you did pay, reply with your payment screenshot.',
+      type: 'donation',
+    );
+    await _logAudit(
+      action: 'donation_rejected',
+      entityType: 'donation',
+      entityId: donationId,
+      actorId: _sessionUserId ?? 'admin',
+      details: note,
+    );
   }
 
   Future<void> verifyDonation(String donationId) async {
@@ -3104,6 +3340,9 @@ class FirestoreService extends ChangeNotifier {
     final newDonor = donor.copyWith(
       donorId: donorId,
       createdAt: DateTime.now(),
+      city: PakistanCities.normalize(donor.city).isEmpty
+          ? donor.city.trim()
+          : PakistanCities.normalize(donor.city),
     );
 
     if (isLiveFirebase) {
@@ -3190,6 +3429,9 @@ class FirestoreService extends ChangeNotifier {
       userId: need.userId,
       status: need.status,
       createdAt: need.createdAt,
+      city: PakistanCities.normalize(need.city).isNotEmpty
+          ? PakistanCities.normalize(need.city)
+          : PakistanCities.normalize(need.hospital),
     );
 
     if (isLiveFirebase) {
@@ -3852,7 +4094,11 @@ class FirestoreService extends ChangeNotifier {
             'Complete the active response before changing availability.',
           );
         }
-        tx.update(ref, {'status': newStatus});
+        tx.update(ref, {
+          'status': newStatus,
+          if (newStatus == 'available') 'autoOfflineAt': null,
+          if (newStatus == 'available') 'missedStreak': 0,
+        });
       });
     } else {
       final idx = _mockEmployees.indexWhere((e) => e.employeeId == employeeId);
@@ -3864,7 +4110,13 @@ class FirestoreService extends ChangeNotifier {
           'Complete the active response before changing availability.',
         );
       }
-      _mockEmployees[idx] = _mockEmployees[idx].copyWith(status: newStatus);
+      _mockEmployees[idx] = newStatus == 'available'
+          ? _mockEmployees[idx].copyWith(
+              status: newStatus,
+              clearAutoOffline: true,
+              missedStreak: 0,
+            )
+          : _mockEmployees[idx].copyWith(status: newStatus);
       _broadcastAll();
     }
     unawaited(
@@ -4978,6 +5230,15 @@ class FirestoreService extends ChangeNotifier {
     final newReport = report.copyWith(
       reportId: reportId,
       reportedAt: DateTime.now(),
+      city: PakistanCities.normalize(report.city).isNotEmpty
+          ? PakistanCities.normalize(report.city)
+          : (report.lastSeenLat != null && report.lastSeenLng != null
+                ? PakistanCities.fromLocation(
+                    report.lastSeenLat!,
+                    report.lastSeenLng!,
+                    address: report.lastSeenLocation,
+                  )
+                : PakistanCities.normalize(report.lastSeenLocation)),
     );
 
     if (isLiveFirebase) {
@@ -5028,6 +5289,9 @@ class FirestoreService extends ChangeNotifier {
     _demoTicker?.cancel();
     _demoSub?.cancel();
     _simulationRequestsSub?.cancel();
+    _offersSub?.cancel();
+    _ownRequestsSub?.cancel();
+    _offersController.close();
     for (final subscription in _liveLocationSubscriptions.values) {
       subscription.cancel();
     }

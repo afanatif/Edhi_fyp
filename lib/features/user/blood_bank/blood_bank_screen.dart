@@ -9,6 +9,8 @@ import '../../../services/auth_service.dart';
 import '../../../services/firestore_service.dart';
 import '../../../models/blood_donor.dart';
 import '../../../core/widgets/skeleton_loader.dart';
+import '../../../core/widgets/city_picker.dart';
+import '../../../core/constants/pakistan_cities.dart';
 
 class BloodBankScreen extends StatefulWidget {
   const BloodBankScreen({super.key});
@@ -20,6 +22,16 @@ class BloodBankScreen extends StatefulWidget {
 class _BloodBankScreenState extends State<BloodBankScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  String? _city;
+
+  /// Opens on the user's own city; "All cities" shows everything.
+  String get _selectedCity {
+    if (_city != null) return _city!;
+    final own = PakistanCities.normalize(
+      context.read<AuthService>().currentUser?.city,
+    );
+    return own.isEmpty ? PakistanCities.defaultCity : own;
+  }
 
   @override
   void initState() {
@@ -35,8 +47,31 @@ class _BloodBankScreenState extends State<BloodBankScreen>
 
   @override
   Widget build(BuildContext context) {
+    final city = _selectedCity;
+    void setCity(String c) => setState(() => _city = c);
     return Column(
       children: [
+        Container(
+          color: Colors.white,
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+          child: Row(
+            children: [
+              const Icon(Icons.bloodtype, color: AppColors.emergencyRed),
+              const SizedBox(width: 6),
+              const Expanded(
+                child: Text(
+                  'Blood bank',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                ),
+              ),
+              Flexible(
+                child: CityFilterChip(city: city, onChanged: setCity),
+              ),
+            ],
+          ),
+        ),
         Container(
           color: Colors.white,
           child: TabBar(
@@ -58,10 +93,10 @@ class _BloodBankScreenState extends State<BloodBankScreen>
         Expanded(
           child: TabBarView(
             controller: _tabController,
-            children: const [
-              _UrgentBloodNeedsTab(),
-              _RegisterDonorTab(),
-              _SearchDonorsTab(),
+            children: [
+              _UrgentBloodNeedsTab(city: city, onCity: setCity),
+              _RegisterDonorTab(defaultCity: city),
+              _SearchDonorsTab(city: city, onCity: setCity),
             ],
           ),
         ),
@@ -70,8 +105,54 @@ class _BloodBankScreenState extends State<BloodBankScreen>
   }
 }
 
+/// Friendly empty state with a one-tap "see every city" action.
+class _CityEmpty extends StatelessWidget {
+  final IconData icon;
+  final String message;
+  final String city;
+  final ValueChanged<String> onCity;
+  const _CityEmpty({
+    required this.icon,
+    required this.message,
+    required this.city,
+    required this.onCity,
+  });
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: Padding(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 52, color: AppColors.textMuted),
+          const SizedBox(height: 12),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+          if (city != PakistanCities.all) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => onCity(PakistanCities.all),
+              icon: const Icon(Icons.public),
+              label: const Text('See all cities'),
+            ),
+          ],
+        ],
+      ),
+    ),
+  );
+}
+
+String _cityPhrase(String city) =>
+    city == PakistanCities.all ? 'any city' : city;
+
 class _UrgentBloodNeedsTab extends StatelessWidget {
-  const _UrgentBloodNeedsTab();
+  final String city;
+  final ValueChanged<String> onCity;
+  const _UrgentBloodNeedsTab({required this.city, required this.onCity});
 
   Future<void> _showCreateNeedDialog(BuildContext context) async {
     final user = context.read<AuthService>().currentUser;
@@ -83,6 +164,11 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
     final unitsController = TextEditingController(text: '2');
     final phoneController = TextEditingController(text: user.phone);
     String selectedGroup = 'O+';
+    String needCity = city == PakistanCities.all
+        ? (PakistanCities.normalize(user.city).isEmpty
+              ? PakistanCities.defaultCity
+              : PakistanCities.normalize(user.city))
+        : city;
 
     await showDialog(
       context: context,
@@ -116,6 +202,12 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
                 CustomTextField(
                   controller: hospitalController,
                   label: 'Hospital & Ward',
+                ),
+                const SizedBox(height: 12),
+                _CityField(
+                  city: needCity,
+                  label: 'Hospital city',
+                  onChanged: (c) => setDialogState(() => needCity = c),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -211,6 +303,7 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
                                   phoneController.text,
                                 ),
                                 createdAt: DateTime.now(),
+                                city: needCity,
                               ),
                             );
                         if (!ctx.mounted) return;
@@ -273,10 +366,21 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
               child: Text('Unable to load blood requests. Please retry.'),
             );
           }
-          final needs = snapshot.data ?? [];
+          final needs = (snapshot.data ?? [])
+              .where(
+                (n) => PakistanCities.matches(
+                  n.city.isEmpty ? n.hospital : n.city,
+                  city,
+                ),
+              )
+              .toList();
           if (needs.isEmpty) {
-            return const Center(
-              child: Text('No urgent blood requests at this moment.'),
+            return _CityEmpty(
+              icon: Icons.favorite_border,
+              message:
+                  'No urgent blood requests in ${_cityPhrase(city)} right now.',
+              city: city,
+              onCity: onCity,
             );
           }
 
@@ -362,6 +466,17 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 4),
+                    Text(
+                      PakistanCities.label(
+                        item.city.isEmpty ? item.hospital : item.city,
+                      ),
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.emergencyRedDark,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
                     Row(
                       children: [
                         const Icon(
@@ -462,8 +577,44 @@ class _UrgentBloodNeedsTab extends StatelessWidget {
   }
 }
 
+/// Read-only field that opens the city list.
+class _CityField extends StatelessWidget {
+  final String city;
+  final String label;
+  final ValueChanged<String> onChanged;
+  const _CityField({
+    required this.city,
+    required this.label,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) => InkWell(
+    borderRadius: BorderRadius.circular(12),
+    onTap: () async {
+      final picked = await showCityPicker(
+        context,
+        current: city,
+        allowAll: false,
+        title: label,
+      );
+      if (picked != null) onChanged(picked);
+    },
+    child: InputDecorator(
+      decoration: InputDecoration(
+        labelText: label,
+        prefixIcon: const Icon(Icons.location_city),
+        suffixIcon: const Icon(Icons.arrow_drop_down),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      child: Text(city, style: const TextStyle(fontWeight: FontWeight.w700)),
+    ),
+  );
+}
+
 class _RegisterDonorTab extends StatefulWidget {
-  const _RegisterDonorTab();
+  final String defaultCity;
+  const _RegisterDonorTab({required this.defaultCity});
 
   @override
   State<_RegisterDonorTab> createState() => _RegisterDonorTabState();
@@ -471,7 +622,7 @@ class _RegisterDonorTab extends StatefulWidget {
 
 class _RegisterDonorTabState extends State<_RegisterDonorTab> {
   String _bloodGroup = 'O+';
-  final _cityController = TextEditingController(text: 'Abbottabad');
+  late String _donorCity;
   final _phoneController = TextEditingController();
   bool _availability = true;
   bool _isSubmitting = false;
@@ -494,11 +645,14 @@ class _RegisterDonorTabState extends State<_RegisterDonorTab> {
     if (user != null) {
       _phoneController.text = user.phone;
     }
+    final own = PakistanCities.normalize(user?.city);
+    _donorCity = widget.defaultCity != PakistanCities.all
+        ? widget.defaultCity
+        : (own.isEmpty ? PakistanCities.defaultCity : own);
   }
 
   @override
   void dispose() {
-    _cityController.dispose();
     _phoneController.dispose();
     super.dispose();
   }
@@ -510,7 +664,7 @@ class _RegisterDonorTabState extends State<_RegisterDonorTab> {
 
     if (user == null ||
         !AppUser.isValidPhone(_phoneController.text) ||
-        _cityController.text.trim().isEmpty) {
+        _donorCity.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
@@ -530,7 +684,7 @@ class _RegisterDonorTabState extends State<_RegisterDonorTab> {
       userPhone: AppUser.normalizePhone(_phoneController.text),
       bloodGroup: _bloodGroup,
       availability: _availability,
-      city: _cityController.text.trim(),
+      city: _donorCity,
     );
 
     try {
@@ -623,10 +777,10 @@ class _RegisterDonorTabState extends State<_RegisterDonorTab> {
           ),
 
           const SizedBox(height: 20),
-          CustomTextField(
-            controller: _cityController,
-            label: 'Your City / Town',
-            prefixIcon: Icons.location_city,
+          _CityField(
+            city: _donorCity,
+            label: 'Your city',
+            onChanged: (c) => setState(() => _donorCity = c),
           ),
           const SizedBox(height: 14),
           CustomTextField(
@@ -666,7 +820,9 @@ class _RegisterDonorTabState extends State<_RegisterDonorTab> {
 }
 
 class _SearchDonorsTab extends StatefulWidget {
-  const _SearchDonorsTab();
+  final String city;
+  final ValueChanged<String> onCity;
+  const _SearchDonorsTab({required this.city, required this.onCity});
 
   @override
   State<_SearchDonorsTab> createState() => _SearchDonorsTabState();
@@ -754,21 +910,46 @@ class _SearchDonorsTabState extends State<_SearchDonorsTab> {
                   child: Text('Unable to load donors. Please retry.'),
                 );
               }
-              final donors = snapshot.data ?? [];
+              final donors =
+                  (snapshot.data ?? [])
+                      .where((d) => PakistanCities.matches(d.city, widget.city))
+                      .toList()
+                    ..sort(
+                      (a, b) => (b.availability ? 1 : 0).compareTo(
+                        a.availability ? 1 : 0,
+                      ),
+                    );
               if (donors.isEmpty) {
-                return const Center(
-                  child: Text('No donors found matching criteria.'),
+                return _CityEmpty(
+                  icon: Icons.people_outline,
+                  message:
+                      'No ${_filterGroup == 'All' ? '' : '$_filterGroup '}donors in ${_cityPhrase(widget.city)} yet.',
+                  city: widget.city,
+                  onCity: widget.onCity,
                 );
               }
+              final available = donors.where((d) => d.availability).length;
 
               return ListView.builder(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 20,
                   vertical: 8,
                 ),
-                itemCount: donors.length,
+                itemCount: donors.length + 1,
                 itemBuilder: (context, index) {
-                  final d = donors[index];
+                  if (index == 0) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        '${donors.length} donor${donors.length == 1 ? '' : 's'} in ${_cityPhrase(widget.city)} · $available available now',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                    );
+                  }
+                  final d = donors[index - 1];
 
                   return Container(
                     margin: const EdgeInsets.only(bottom: 10),
@@ -804,7 +985,7 @@ class _SearchDonorsTabState extends State<_SearchDonorsTab> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                d.city,
+                                PakistanCities.label(d.city),
                                 style: const TextStyle(
                                   fontSize: 12,
                                   color: AppColors.textSecondary,

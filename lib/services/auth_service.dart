@@ -347,6 +347,22 @@ class AuthService extends ChangeNotifier {
     );
   }
 
+  /// Saves the signed-in user's home city (GPS-detected or chosen).
+  Future<void> updateOwnCity(String city, {String source = 'manual'}) async {
+    final user = _currentUser;
+    if (user == null) return;
+    final uid = _fbAuth?.currentUser?.uid;
+    if (uid != null && uid == user.id) {
+      await FirebaseFirestore.instance.collection('users').doc(uid).update({
+        'city': city,
+        'citySource': source,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    _currentUser = user.copyWith(city: city, citySource: source);
+    notifyListeners();
+  }
+
   Future<void> signOut() async {
     _isLoading = true;
     notifyListeners();

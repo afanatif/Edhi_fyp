@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/widgets/city_picker.dart';
+import '../../../core/constants/pakistan_cities.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
 import '../../../core/theme/app_colors.dart';
@@ -47,6 +49,50 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
         if (mounted) _triggerSosQuickSheet(context);
       });
     }
+    WidgetsBinding.instance.addPostFrameCallback((_) => _ensureCity());
+  }
+
+  /// First sign-in: work out the citizen's city from GPS (or the default).
+  Future<void> _ensureCity() async {
+    if (!mounted) return;
+    final auth = context.read<AuthService>();
+    final firestore = context.read<FirestoreService>();
+    final user = auth.currentUser;
+    if (user == null || user.city.isNotEmpty || !firestore.isLiveFirebase) {
+      return;
+    }
+    final found = await detectCityFromGps();
+    if (!mounted) return;
+    try {
+      await auth.updateOwnCity(found.city, source: found.source);
+    } catch (_) {
+      return;
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(
+          found.source == 'gps'
+              ? 'Your city: ${found.city}. Blood donors and missing persons are shown for your city.'
+              : 'Your city is set to ${found.city}. You can change it any time.',
+        ),
+        action: SnackBarAction(
+          label: 'Change',
+          onPressed: () async {
+            final picked = await showCityPicker(
+              context,
+              current: found.city,
+              allowAll: false,
+              title: 'Your city',
+            );
+            if (picked != null && mounted) {
+              await auth.updateOwnCity(picked);
+            }
+          },
+        ),
+      ),
+    );
   }
 
   void _triggerSosQuickSheet(BuildContext context, [String? initialCategory]) {
@@ -250,6 +296,36 @@ class _UserHomeScreenState extends State<UserHomeScreen> {
                 children: [
                   // Prominent SOS Hero Card with Multi-Ring Pulse
                   if (user != null) EmergencyPolicyBanner(userId: user.id),
+                  if (user != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 12),
+                      child: Row(
+                        children: [
+                          const Text(
+                            'Your city',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Flexible(
+                            child: CityFilterChip(
+                              city:
+                                  PakistanCities.label(user.city) ==
+                                      PakistanCities.notSet
+                                  ? PakistanCities.defaultCity
+                                  : PakistanCities.label(user.city),
+                              allowAll: false,
+                              onChanged: (c) => context
+                                  .read<AuthService>()
+                                  .updateOwnCity(c)
+                                  .catchError((_) {}),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(24),

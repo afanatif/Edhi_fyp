@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/pakistan_cities.dart';
+import '../../../core/widgets/city_picker.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../services/firestore_service.dart';
@@ -14,6 +16,9 @@ class AdminBloodBankView extends StatefulWidget {
 
 class _AdminBloodBankViewState extends State<AdminBloodBankView> {
   String _selectedGroup = 'All';
+  String _city = PakistanCities.all;
+  static String _needCity(UrgentBloodNeed n) =>
+      n.city.isEmpty ? n.hospital : n.city;
 
   final List<String> _groups = [
     'All',
@@ -34,6 +39,35 @@ class _AdminBloodBankViewState extends State<AdminBloodBankView> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Blood bank by city',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+            ),
+            Flexible(
+              child: CityFilterChip(
+                city: _city,
+                onChanged: (c) => setState(() => _city = c),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        StreamBuilder<List<BloodDonor>>(
+          stream: firestore.getBloodDonorsStream(),
+          builder: (context, snapshot) => CityCountStrip(
+            counts: PakistanCities.countBy(
+              snapshot.data ?? const <BloodDonor>[],
+              (d) => d.city,
+            ),
+            selected: _city,
+            onSelected: (c) => setState(() => _city = c),
+          ),
+        ),
+        const SizedBox(height: 16),
         // Urgent Needs Section
         const Text(
           'Active Hospital Blood Requests',
@@ -54,7 +88,9 @@ class _AdminBloodBankViewState extends State<AdminBloodBankView> {
                 skeleton: SkeletonBloodCard(),
               );
             }
-            final needs = snapshot.data ?? [];
+            final needs = (snapshot.data ?? [])
+                .where((n) => PakistanCities.matches(_needCity(n), _city))
+                .toList();
             if (needs.isEmpty) {
               return Container(
                 padding: const EdgeInsets.all(16),
@@ -192,7 +228,9 @@ class _AdminBloodBankViewState extends State<AdminBloodBankView> {
                 skeleton: SkeletonBloodCard(),
               );
             }
-            final donors = snapshot.data ?? [];
+            final donors = (snapshot.data ?? [])
+                .where((d) => PakistanCities.matches(d.city, _city))
+                .toList();
             if (donors.isEmpty) {
               return Container(
                 width: double.infinity,

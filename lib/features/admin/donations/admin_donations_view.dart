@@ -17,6 +17,60 @@ class AdminDonationsView extends StatefulWidget {
 class _AdminDonationsViewState extends State<AdminDonationsView> {
   String _filter = 'All';
 
+  Future<void> _reject(
+    BuildContext context,
+    FirestoreService firestore,
+    String donationId,
+  ) async {
+    final reason = TextEditingController(
+      text: 'Transaction ID not found in the easypaisa account.',
+    );
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Reject this payment?'),
+        content: TextField(
+          controller: reason,
+          maxLines: 2,
+          decoration: const InputDecoration(
+            labelText: 'Reason shown to the donor',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.emergencyRed,
+            ),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    final text = reason.text;
+    reason.dispose();
+    if (ok != true) return;
+    try {
+      await firestore.rejectDonation(donationId, text);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Donation #$donationId rejected.')),
+        );
+      }
+    } catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Could not reject: $error')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final firestore = context.watch<FirestoreService>();
@@ -272,6 +326,34 @@ class _AdminDonationsViewState extends State<AdminDonationsView> {
                                       color: AppColors.textPrimary,
                                     ),
                                   ),
+                                  if (isMonetary &&
+                                      d.transactionReference.isNotEmpty) ...[
+                                    const SizedBox(height: 6),
+                                    SelectableText(
+                                      'TID ${d.transactionReference} · ${d.paymentMethod}',
+                                      style: const TextStyle(
+                                        fontSize: 12.5,
+                                        fontWeight: FontWeight.w800,
+                                        letterSpacing: 0.4,
+                                      ),
+                                    ),
+                                    const Text(
+                                      'Match this TID and amount in the easypaisa account history before verifying.',
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                  if (d.reviewNote.isNotEmpty)
+                                    Text(
+                                      'Rejected: ${d.reviewNote}',
+                                      style: const TextStyle(
+                                        fontSize: 11.5,
+                                        color: AppColors.emergencyRed,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
                                   if (d.photoUrl.isNotEmpty)
                                     AttachmentPhoto(url: d.photoUrl),
                                   const SizedBox(height: 2),
@@ -325,6 +407,23 @@ class _AdminDonationsViewState extends State<AdminDonationsView> {
                                     ),
                                   );
                                 },
+                              ),
+                            if (isPending && isMonetary)
+                              Padding(
+                                padding: const EdgeInsets.only(left: 8),
+                                child: OutlinedButton.icon(
+                                  key: ValueKey('reject-${d.donationId}'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.emergencyRed,
+                                  ),
+                                  icon: const Icon(Icons.block, size: 16),
+                                  label: const Text(
+                                    'Reject',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                  onPressed: () =>
+                                      _reject(context, firestore, d.donationId),
+                                ),
                               ),
                           ];
                           if (constraints.maxWidth >= 760) {

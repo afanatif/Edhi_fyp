@@ -52,6 +52,20 @@ class EmergencyRequest {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  // Driver acknowledgement (offer) state.
+  final String? offerId;
+  final String? offerEmployeeId;
+  final DateTime? offerAt;
+  final int offerAttempts;
+  final List<String> skippedEmployeeIds;
+  final bool dispatchAlert;
+  final DateTime? acceptedAt;
+
+  /// City derived from the patient pin, used for regional reports.
+  final String city;
+
+  bool get hasOffer => offerEmployeeId != null && offerEmployeeId!.isNotEmpty;
+
   const EmergencyRequest({
     required this.requestId,
     required this.userId,
@@ -72,6 +86,14 @@ class EmergencyRequest {
     this.isVerified = false,
     this.createdAt,
     this.updatedAt,
+    this.offerId,
+    this.offerEmployeeId,
+    this.offerAt,
+    this.offerAttempts = 0,
+    this.skippedEmployeeIds = const [],
+    this.dispatchAlert = false,
+    this.acceptedAt,
+    this.city = '',
   });
 
   factory EmergencyRequest.fromMap(Map<String, dynamic> map, {String? docId}) {
@@ -112,6 +134,16 @@ class EmergencyRequest {
       isVerified: map['isVerified'] ?? false,
       createdAt: parseDate(map['createdAt']),
       updatedAt: parseDate(map['updatedAt']),
+      offerId: map['offerId'] as String?,
+      offerEmployeeId: map['offerEmployeeId'] as String?,
+      offerAt: parseDate(map['offerAt']),
+      offerAttempts: (map['offerAttempts'] as num?)?.toInt() ?? 0,
+      skippedEmployeeIds:
+          (map['skippedEmployeeIds'] as List?)?.whereType<String>().toList() ??
+          const [],
+      dispatchAlert: map['dispatchAlert'] as bool? ?? false,
+      acceptedAt: parseDate(map['acceptedAt']),
+      city: map['city'] as String? ?? '',
     );
   }
 
@@ -146,6 +178,13 @@ class EmergencyRequest {
       'updatedAt': updatedAt != null
           ? Timestamp.fromDate(updatedAt!)
           : FieldValue.serverTimestamp(),
+      'offerId': offerId,
+      'offerEmployeeId': offerEmployeeId,
+      'offerAt': offerAt == null ? null : Timestamp.fromDate(offerAt!),
+      'offerAttempts': offerAttempts,
+      'skippedEmployeeIds': skippedEmployeeIds,
+      'dispatchAlert': dispatchAlert,
+      'city': city,
     };
   }
 
@@ -169,6 +208,15 @@ class EmergencyRequest {
     bool? isVerified,
     DateTime? createdAt,
     DateTime? updatedAt,
+    String? offerId,
+    String? offerEmployeeId,
+    DateTime? offerAt,
+    bool clearOffer = false,
+    int? offerAttempts,
+    List<String>? skippedEmployeeIds,
+    bool? dispatchAlert,
+    DateTime? acceptedAt,
+    String? city,
   }) {
     return EmergencyRequest(
       requestId: requestId ?? this.requestId,
@@ -190,6 +238,16 @@ class EmergencyRequest {
       isVerified: isVerified ?? this.isVerified,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
+      offerId: clearOffer ? null : offerId ?? this.offerId,
+      offerEmployeeId: clearOffer
+          ? null
+          : offerEmployeeId ?? this.offerEmployeeId,
+      offerAt: clearOffer ? null : offerAt ?? this.offerAt,
+      offerAttempts: offerAttempts ?? this.offerAttempts,
+      skippedEmployeeIds: skippedEmployeeIds ?? this.skippedEmployeeIds,
+      dispatchAlert: dispatchAlert ?? this.dispatchAlert,
+      acceptedAt: acceptedAt ?? this.acceptedAt,
+      city: city ?? this.city,
     );
   }
 }

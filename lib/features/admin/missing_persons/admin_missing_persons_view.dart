@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import '../../../core/constants/pakistan_cities.dart';
+import '../../../core/widgets/city_picker.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/attachment_photo.dart';
@@ -14,6 +16,9 @@ class AdminMissingPersonsView extends StatefulWidget {
 }
 
 class _AdminMissingPersonsViewState extends State<AdminMissingPersonsView> {
+  String _city = PakistanCities.all;
+  static String _cityOf(MissingPersonReport r) =>
+      r.city.isNotEmpty ? r.city : r.lastSeenLocation;
   late final Stream<List<MissingPersonReport>> _reports;
   String _query = '';
   String _status = 'All';
@@ -166,8 +171,9 @@ class _AdminMissingPersonsViewState extends State<AdminMissingPersonsView> {
           .where(
             (r) =>
                 (_status == 'All' || r.status == _status) &&
+                PakistanCities.matches(_cityOf(r), _city) &&
                 [
-                    r.personName,
+                  r.personName,
                   r.lastSeenLocation,
                   r.description,
                   r.contactName,
@@ -194,6 +200,12 @@ class _AdminMissingPersonsViewState extends State<AdminMissingPersonsView> {
             ),
             onChanged: (value) =>
                 setState(() => _query = value.trim().toLowerCase()),
+          ),
+          const SizedBox(height: 12),
+          CityCountStrip(
+            counts: PakistanCities.countBy(reports, _cityOf),
+            selected: _city,
+            onSelected: (c) => setState(() => _city = c),
           ),
           const SizedBox(height: 12),
           Wrap(

@@ -6,6 +6,8 @@ import '../../../models/app_user.dart';
 import '../../../models/missing_person_report.dart';
 import '../../../services/auth_service.dart';
 import '../../../services/firestore_service.dart';
+import '../../../core/constants/pakistan_cities.dart';
+import '../../../core/widgets/city_picker.dart';
 
 class MissingPersonForm extends StatefulWidget {
   const MissingPersonForm({super.key});
@@ -22,6 +24,8 @@ class _MissingPersonFormState extends State<MissingPersonForm> {
   final _contact = TextEditingController();
   final _phone = TextEditingController();
   String _gender = 'Male';
+  late String _city;
+  bool _cityChosen = false;
   DateTime? _lastSeen;
   SelectedPhoto? _photo;
   String? _uploadedUrl;
@@ -34,6 +38,30 @@ class _MissingPersonFormState extends State<MissingPersonForm> {
     final user = context.read<AuthService>().currentUser;
     _contact.text = user?.name ?? '';
     _phone.text = user?.phone ?? '';
+    final own = PakistanCities.normalize(user?.city);
+    _city = own.isEmpty ? PakistanCities.defaultCity : own;
+    // Typing "Lahore railway station" pre-selects Lahore until a city is picked.
+    _location.addListener(() {
+      final named = PakistanCities.normalize(_location.text);
+      if (!_cityChosen && named.isNotEmpty && named != _city) {
+        setState(() => _city = named);
+      }
+    });
+  }
+
+  Future<void> _pickCity() async {
+    final picked = await showCityPicker(
+      context,
+      current: _city,
+      allowAll: false,
+      title: 'City where last seen',
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _city = picked;
+        _cityChosen = true;
+      });
+    }
   }
 
   Future<void> _pickTime() async {
@@ -96,6 +124,7 @@ class _MissingPersonFormState extends State<MissingPersonForm> {
           age: int.parse(_age.text),
           gender: _gender,
           lastSeenLocation: _location.text.trim(),
+          city: _city,
           lastSeenAt: _lastSeen,
           description: _description.text.trim(),
           contactName: _contact.text.trim(),
@@ -222,7 +251,24 @@ class _MissingPersonFormState extends State<MissingPersonForm> {
                   onChanged: _busy ? null : (g) => setState(() => _gender = g!),
                 ),
                 const SizedBox(height: 14),
-                _field(_location, 'Last seen location and city'),
+                InkWell(
+                  borderRadius: BorderRadius.circular(4),
+                  onTap: _busy ? null : _pickCity,
+                  child: InputDecorator(
+                    decoration: const InputDecoration(
+                      labelText: 'City where last seen',
+                      prefixIcon: Icon(Icons.location_city),
+                      suffixIcon: Icon(Icons.arrow_drop_down),
+                      border: OutlineInputBorder(),
+                    ),
+                    child: Text(
+                      _city,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _field(_location, 'Last seen place (market, station, street)'),
                 OutlinedButton.icon(
                   onPressed: _busy ? null : _pickTime,
                   icon: const Icon(Icons.schedule),

@@ -99,6 +99,155 @@ service cloud.firestore {
         && getAfter(jobPath).data.status == 'Cancelled'
         && getAfter(jobPath).data.updatedAt == request.time;
     }
+    // ---------- Driver acknowledgement (60-second offers) ----------
+    function reqPath(id) { return /databases/$(database)/documents/emergency_requests/$(id); }
+    function unitPath(id) { return /databases/$(database)/documents/employees/$(id); }
+    function offerPath(id) { return /databases/$(database)/documents/dispatch_offers/$(id); }
+    function offerWindow() { return duration.value(60, 's'); }
+    function hasOffer(r) { return r.get('offerEmployeeId', null) != null; }
+    function skippedOf(r) { return r.get('skippedEmployeeIds', []); }
+    // Unit is free for a new offer: none pending, or the old one lapsed (+5 s).
+    function unitFreeForOffer(u) {
+      return u.get('pendingOfferRequestId', '') == '' || u.get('pendingOfferAt', null) == null
+        || request.time >= u.pendingOfferAt + duration.value(65, 's');
+    }
+    // The request owner's app offers its own waiting request to a linked driver.
+    function ownerOffers(id) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let unit = get(unitPath(after.offerEmployeeId)).data;
+      let unitAfter = getAfter(unitPath(after.offerEmployeeId)).data;
+      let offer = getAfter(offerPath(after.offerId)).data;
+      return owned() && before.status in ['Pending', 'Approved']
+        && (before.get('fraudRiskLevel', 'Low') != 'High' || before.get('isVerified', false) == true)
+        && !hasOffer(before)
+        && after.diff(before).affectedKeys().hasOnly(['offerId', 'offerEmployeeId', 'offerAt', 'offerAttempts', 'updatedAt'])
+        && after.offerEmployeeId is string && after.offerId is string
+        && after.offerAt == request.time && after.updatedAt == request.time
+        && after.offerAttempts == before.get('offerAttempts', 0) + 1
+        && !(after.offerEmployeeId in skippedOf(before))
+        && unit.role == 'driver' && unit.status == 'available' && unit.get('userId', '') != ''
+        && unitFreeForOffer(unit)
+        && unitAfter.pendingOfferRequestId == id && unitAfter.pendingOfferAt == request.time
+        && offer.requestId == id && offer.employeeId == after.offerEmployeeId
+        && offer.driverUserId == unit.userId && offer.requestUserId == request.auth.uid
+        && offer.outcome == 'pending' && offer.offeredAt == request.time;
+    }
+    // Everyone nearby passed: the owner may restart the round and raise the HQ alert.
+    function ownerRestartsRound() {
+      let before = resource.data;
+      let after = request.resource.data;
+      return owned() && before.status in ['Pending', 'Approved'] && !hasOffer(before)
+        && after.diff(before).affectedKeys().hasOnly(['skippedEmployeeIds', 'dispatchAlert', 'updatedAt'])
+        && after.skippedEmployeeIds.size() == 0 && after.dispatchAlert == true
+        && after.updatedAt == request.time;
+    }
+    // Closes the current offer - declined in time by the driver, or missed after
+    // the window (by the owner's or the driver's app) - and skips that driver.
+    function releasesOffer(id) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let offer = getAfter(offerPath(before.offerId)).data;
+      let isDriver = driver() && get(unitPath(before.offerEmployeeId)).data.userId == request.auth.uid;
+      let expired = request.time >= before.offerAt + offerWindow();
+      return active() && hasOffer(before) && before.status in ['Pending', 'Approved']
+        && (owned() || isDriver)
+        && after.diff(before).affectedKeys().hasOnly(['offerId', 'offerEmployeeId', 'offerAt', 'skippedEmployeeIds', 'dispatchAlert', 'updatedAt'])
+        && after.offerId == null && after.offerEmployeeId == null && after.offerAt == null
+        && after.updatedAt == request.time
+        && after.skippedEmployeeIds == skippedOf(before).concat([before.offerEmployeeId])
+        && after.get('dispatchAlert', false) is bool
+        && (before.get('dispatchAlert', false) == false || after.dispatchAlert == true)
+        && ((expired && offer.outcome == 'missed') || (isDriver && !expired && offer.outcome == 'declined'));
+    }
+    // The offered driver accepts in time; the trip starts in the same transaction.
+    function acceptsOffer(id) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let employeeId = before.offerEmployeeId;
+      let unitAfter = getAfter(unitPath(employeeId)).data;
+      return driver() && hasOffer(before) && before.status in ['Pending', 'Approved']
+        && get(unitPath(employeeId)).data.userId == request.auth.uid
+        && request.time < before.offerAt + offerWindow()
+        && after.diff(before).affectedKeys().hasOnly(['status', 'assignedEmployeeId', 'assignedEmployeeName', 'assignedDriverUserId', 'offerId', 'offerEmployeeId', 'offerAt', 'acceptedAt', 'updatedAt'])
+        && after.status == 'InProgress' && after.assignedEmployeeId == employeeId
+        && after.assignedDriverUserId == request.auth.uid && after.assignedEmployeeName is string
+        && after.offerId == null && after.offerEmployeeId == null && after.offerAt == null
+        && after.acceptedAt == request.time && after.updatedAt == request.time
+        && unitAfter.status == 'busy' && unitAfter.activeRequestId == id
+        && getAfter(offerPath(before.offerId)).data.outcome == 'accepted';
+    }
+    function offered() {
+      return driver() && resource.data.get('offerEmployeeId', null) != null
+        && get(unitPath(resource.data.offerEmployeeId)).data.userId == request.auth.uid;
+    }
+    // Employee-doc side of an owner-created offer.
+    function receivesOffer(employeeId) {
+      let after = request.resource.data;
+      let job = getAfter(reqPath(after.pendingOfferRequestId)).data;
+      return active() && after.diff(resource.data).affectedKeys().hasOnly(['pendingOfferRequestId', 'pendingOfferAt'])
+        && resource.data.status == 'available' && resource.data.get('userId', '') != ''
+        && unitFreeForOffer(resource.data)
+        && after.pendingOfferAt == request.time
+        && job.userId == request.auth.uid && job.offerEmployeeId == employeeId && job.offerAt == request.time;
+    }
+    // Employee-doc side of a driver accepting their own offer.
+    function acceptsOwnOffer(employeeId) {
+      let after = request.resource.data;
+      let job = getAfter(reqPath(after.activeRequestId)).data;
+      return driver() && resource.data.userId == request.auth.uid && resource.data.status == 'available'
+        && after.diff(resource.data).affectedKeys().hasOnly(['status', 'activeRequestId', 'pendingOfferRequestId', 'pendingOfferAt', 'missedStreak'])
+        && after.status == 'busy' && after.pendingOfferRequestId == '' && after.pendingOfferAt == null
+        && after.get('missedStreak', 0) == 0
+        && resource.data.get('pendingOfferRequestId', '') == after.activeRequestId
+        && job.assignedEmployeeId == employeeId && job.status == 'InProgress' && job.acceptedAt == request.time;
+    }
+    // A driver may always clear their own offer flag (it only frees them).
+    function clearsOwnOffer() {
+      return driver() && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pendingOfferRequestId', 'pendingOfferAt', 'missedStreak'])
+        && request.resource.data.pendingOfferRequestId == '' && request.resource.data.pendingOfferAt == null
+        && request.resource.data.get('missedStreak', 0) == 0;
+    }
+    // A missed offer adds one to the unit's streak; the 2nd in a row takes an
+    // available unit off duty. Each offer can be counted only once.
+    function countsMissedOffer(employeeId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let offerBefore = get(offerPath(after.lastMissedOfferId)).data;
+      let offerAfter = getAfter(offerPath(after.lastMissedOfferId)).data;
+      let streak = before.get('missedStreak', 0) + 1;
+      let goesOffline = streak >= 2 && before.status == 'available';
+      return active()
+        && after.diff(before).affectedKeys().hasOnly(['missedStreak', 'lastMissedOfferId', 'status', 'autoOfflineAt', 'pendingOfferRequestId', 'pendingOfferAt'])
+        && offerBefore.outcome == 'pending' && offerAfter.outcome == 'missed' && offerAfter.employeeId == employeeId
+        && after.missedStreak == streak
+        && (goesOffline
+          ? (after.status == 'offline' && after.autoOfflineAt == request.time)
+          : (after.status == before.status && after.get('autoOfflineAt', null) == before.get('autoOfflineAt', null)))
+        && (after.get('pendingOfferRequestId', '') == '' || after.get('pendingOfferRequestId', '') == before.get('pendingOfferRequestId', ''))
+        && (after.get('pendingOfferAt', null) == null || after.get('pendingOfferAt', null) == before.get('pendingOfferAt', null));
+    }
+    // Driver switches back on after being taken off duty; this clears the mark.
+    function driverBackOnDuty() {
+      return driver() && resource.data.userId == request.auth.uid
+        && resource.data.status == 'offline' && request.resource.data.status == 'available'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'autoOfflineAt', 'missedStreak'])
+        && request.resource.data.get('autoOfflineAt', null) == null
+        && request.resource.data.get('missedStreak', 0) == 0;
+    }
+    // Driver creates the road journey for the job they just accepted.
+    function driverStartsAcceptedTrip(employeeId) {
+      let after = request.resource.data;
+      let job = getAfter(reqPath(after.requestId)).data;
+      return driver() && get(unitPath(employeeId)).data.userId == request.auth.uid
+        && after.driverUserId == request.auth.uid && after.userId == job.userId
+        && job.assignedEmployeeId == employeeId && job.status == 'InProgress' && job.acceptedAt == request.time
+        && after.enabled == true && after.startedAt == request.time
+        && after.pausedAt == null && after.stoppedAt == null
+        && after.points is list && after.points.size() >= 2
+        && after.durationSeconds is number && after.durationSeconds > 0;
+    }
     match /emergency_usage/{uid} {
       allow get: if active() && request.auth.uid == uid || admin();
       allow list: if admin();
@@ -114,8 +263,9 @@ service cloud.firestore {
           && (get(/databases/$(database)/documents/employees/$(employeeId)).data.userId == request.auth.uid
             || get(/databases/$(database)/documents/emergency_requests/$(get(/databases/$(database)/documents/employees/$(employeeId)).data.activeRequestId)).data.userId == request.auth.uid))));
       allow list: if admin() || (active() && (resource.data.userId == request.auth.uid || resource.data.driverUserId == request.auth.uid));
-      allow create, delete: if admin();
-      allow update: if admin() || automaticArrival(resource.data.requestId, employeeId) || (active()
+      allow create: if admin() || driverStartsAcceptedTrip(employeeId);
+      allow delete: if admin();
+      allow update: if admin() || driverStartsAcceptedTrip(employeeId) || automaticArrival(resource.data.requestId, employeeId) || (active()
         && resource.data.enabled == true
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'stoppedAt'])
         && request.resource.data.enabled == false
@@ -139,7 +289,7 @@ service cloud.firestore {
             && getAfter(/databases/$(database)/documents/login_aliases/$("phone_" + request.resource.data.phone)).data.authEmail == request.resource.data.authEmail))
         && getAfter(/databases/$(database)/documents/phone_claims/$(request.resource.data.phone)).data.userId == uid);
       allow update: if admin() || (active() && request.auth.uid == uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'address', 'profileImage', 'fcmTokens', 'fcmToken', 'updatedAt']));
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'address', 'city', 'citySource', 'profileImage', 'fcmTokens', 'fcmToken', 'updatedAt']));
       allow delete: if admin();
     }
     match /login_aliases/{identifier} {
@@ -168,10 +318,13 @@ service cloud.firestore {
       allow list, create, update, delete: if admin();
     }
     match /emergency_requests/{id} {
-      allow read: if admin() || owned() || assigned();
+      allow read: if admin() || owned() || assigned() || offered();
       allow create: if active() && canRequestEmergency(request.auth.uid) && request.resource.data.userId == request.auth.uid
         && request.resource.data.status == 'Pending'
         && request.resource.data.assignedEmployeeId == null
+        && request.resource.data.get('offerEmployeeId', null) == null
+        && request.resource.data.get('skippedEmployeeIds', []).size() == 0
+        && request.resource.data.get('dispatchAlert', false) == false
         && request.resource.data.createdAt == request.time;
       allow update: if admin()
         || automaticArrival(id, resource.data.assignedEmployeeId)
@@ -188,7 +341,12 @@ service cloud.firestore {
           && (((resource.data.status == 'Assigned' && request.resource.data.status == 'InProgress')
             || (resource.data.status == 'InProgress' && request.resource.data.status == 'Arrived'))
               && get(/databases/$(database)/documents/employees/$(resource.data.assignedEmployeeId)).data.get('isSimulated', true) == false
-            || completesResponse(id)));
+            || completesResponse(id)))
+        || (resource.data.get('offerEmployeeId', null) == null && request.resource.data.get('offerEmployeeId', null) != null && ownerOffers(id))
+        || (resource.data.get('offerEmployeeId', null) == null && request.resource.data.get('dispatchAlert', false) == true && ownerRestartsRound())
+        || (resource.data.get('offerEmployeeId', null) != null && request.resource.data.get('offerEmployeeId', null) == null
+          && request.resource.data.status == resource.data.status && releasesOffer(id))
+        || (resource.data.get('offerEmployeeId', null) != null && request.resource.data.status == 'InProgress' && acceptsOffer(id));
       allow delete: if admin();
     }
     match /employees/{id} {
@@ -205,7 +363,49 @@ service cloud.firestore {
             && request.resource.data.locationUpdatedAt == request.time))
         && (resource.data.status != 'busy' || request.resource.data.status == 'busy'
           || (existsAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId))
-            && getAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId)).data.status in ['Completed', 'Cancelled'])));
+            && getAfter(/databases/$(database)/documents/emergency_requests/$(resource.data.activeRequestId)).data.status in ['Completed', 'Cancelled'])))
+        || (request.resource.data.get('pendingOfferRequestId', '') != '' && receivesOffer(id))
+        || (request.resource.data.status == 'busy' && resource.data.status == 'available' && acceptsOwnOffer(id))
+        || (request.resource.data.get('pendingOfferRequestId', '') == '' && clearsOwnOffer())
+        || (request.resource.data.get('lastMissedOfferId', '') != resource.data.get('lastMissedOfferId', '') && countsMissedOffer(id))
+        || (resource.data.status == 'offline' && request.resource.data.status == 'available' && driverBackOnDuty());
+    }
+    match /dispatch_offers/{offerId} {
+      allow read: if admin() || (active() && (resource.data.driverUserId == request.auth.uid
+        || resource.data.requestUserId == request.auth.uid));
+      allow create: if admin() || (active()
+        && request.resource.data.keys().hasOnly(['requestId', 'requestUserId', 'employeeId', 'driverUserId', 'driverName',
+          'vehicleNumber', 'emergencyType', 'priority', 'address', 'latitude', 'longitude', 'distanceKm', 'attempt',
+          'outcome', 'offeredAt', 'respondedAt'])
+        && request.resource.data.requestUserId == request.auth.uid
+        && request.resource.data.outcome == 'pending' && request.resource.data.offeredAt == request.time
+        && request.resource.data.respondedAt == null
+        && getAfter(reqPath(request.resource.data.requestId)).data.userId == request.auth.uid
+        && getAfter(reqPath(request.resource.data.requestId)).data.offerId == offerId
+        && getAfter(reqPath(request.resource.data.requestId)).data.offerEmployeeId == request.resource.data.employeeId
+        && get(unitPath(request.resource.data.employeeId)).data.userId == request.resource.data.driverUserId);
+      allow update: if admin() || (active() && resource.data.outcome == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['outcome', 'respondedAt'])
+        && request.resource.data.respondedAt == request.time
+        && (
+          // Missed: the window passed and the request no longer points at this offer.
+          (request.resource.data.outcome == 'missed'
+            && request.time >= resource.data.offeredAt + offerWindow()
+            && (resource.data.requestUserId == request.auth.uid || resource.data.driverUserId == request.auth.uid)
+            && getAfter(reqPath(resource.data.requestId)).data.get('offerId', null) != offerId)
+          // Declined or accepted by the driver inside the window.
+          || (request.resource.data.outcome in ['declined', 'accepted']
+            && resource.data.driverUserId == request.auth.uid
+            && request.time < resource.data.offeredAt + offerWindow()
+            && getAfter(reqPath(resource.data.requestId)).data.get('offerId', null) != offerId
+            && (request.resource.data.outcome == 'declined'
+              || getAfter(reqPath(resource.data.requestId)).data.assignedEmployeeId == resource.data.employeeId))
+          // Cancelled: the patient's request closed while the offer was waiting.
+          || (request.resource.data.outcome == 'cancelled'
+            && (resource.data.requestUserId == request.auth.uid || resource.data.driverUserId == request.auth.uid)
+            && getAfter(reqPath(resource.data.requestId)).data.status in ['Cancelled', 'Completed'])
+        ));
+      allow delete: if admin();
     }
     match /blood_donors/{id} {
       allow read: if active();
@@ -234,7 +434,19 @@ service cloud.firestore {
     match /edhi_centers/{id} { allow read: if active(); allow write: if admin(); }
     match /donations/{id} {
       allow read: if admin() || owned();
-      allow create: if active() && request.resource.data.userId == request.auth.uid && request.resource.data.status == 'Pending';
+      // A monetary claim must lock its Transaction ID in the same write.
+      allow create: if active() && request.resource.data.userId == request.auth.uid && request.resource.data.status == 'Pending'
+        && (request.resource.data.get('transactionReference', '') == ''
+          || getAfter(/databases/$(database)/documents/payment_refs/$(request.resource.data.paymentMethod.lower().replace('[^a-z0-9]', '') + '_' + request.resource.data.transactionReference.upper())).data.donationId == id);
+      allow update, delete: if admin();
+    }
+    // One document per paid transaction: a TID can be claimed once.
+    match /payment_refs/{refId} {
+      allow get: if admin() || (active() && resource.data.userId == request.auth.uid);
+      allow list: if admin();
+      allow create: if active() && request.resource.data.keys().hasOnly(['userId', 'donationId', 'createdAt'])
+        && request.resource.data.userId == request.auth.uid && request.resource.data.createdAt == request.time
+        && getAfter(/databases/$(database)/documents/donations/$(request.resource.data.donationId)).data.userId == request.auth.uid;
       allow update, delete: if admin();
     }
     match /photo_attachments/{id} {
@@ -279,7 +491,7 @@ service cloud.firestore {
         'users', 'employees', 'edhi_centers', 'emergency_requests', 'emergency_usage',
         'route_demos', 'driver_links', 'donations', 'blood_donors', 'blood_needs',
         'missing_persons', 'feedback', 'chat_messages', 'notifications', 'tasks',
-        'photo_attachments', 'phone_claims', 'login_aliases'
+        'photo_attachments', 'phone_claims', 'login_aliases', 'dispatch_offers', 'payment_refs'
       ];
     }
   }

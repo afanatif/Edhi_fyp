@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'driver_search_status.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -371,6 +372,8 @@ class _EmergencyDetailViewState extends State<EmergencyDetailView> {
                           ],
                         ),
                       ),
+                    if (!widget.driverMode)
+                      DriverSearchStatus(request: request),
                     _card(DispatchProgress(status: request.status)),
                     if (!terminal)
                       _card(

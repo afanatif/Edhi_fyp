@@ -9,6 +9,8 @@ import '../../../core/widgets/responsive_shell.dart';
 import '../../../services/firestore_service.dart';
 import '../../../models/missing_person_report.dart';
 import '../../../core/widgets/skeleton_loader.dart';
+import '../../../core/widgets/city_picker.dart';
+import '../../../core/constants/pakistan_cities.dart';
 
 class MissingPersonsScreen extends StatefulWidget {
   const MissingPersonsScreen({super.key});
@@ -19,6 +21,18 @@ class MissingPersonsScreen extends StatefulWidget {
 
 class _MissingPersonsScreenState extends State<MissingPersonsScreen> {
   String _selectedFilter = 'All';
+  String? _city;
+
+  String get _selectedCity {
+    if (_city != null) return _city!;
+    final own = PakistanCities.normalize(
+      context.read<AuthService>().currentUser?.city,
+    );
+    return own.isEmpty ? PakistanCities.defaultCity : own;
+  }
+
+  static String cityOf(MissingPersonReport r) =>
+      r.city.isNotEmpty ? r.city : r.lastSeenLocation;
 
   Future<void> _showReportDialog(BuildContext context) async {
     final id = await showModalBottomSheet<String>(
@@ -91,7 +105,12 @@ class _MissingPersonsScreenState extends State<MissingPersonsScreen> {
               ),
             );
           }
-          final reports = snapshot.data ?? [];
+          final city = _selectedCity;
+          final everyReport = snapshot.data ?? [];
+          final cityCounts = PakistanCities.countBy(everyReport, cityOf);
+          final reports = everyReport
+              .where((r) => PakistanCities.matches(cityOf(r), city))
+              .toList();
           final filteredReports = reports.where((r) {
             if (_selectedFilter == 'Searching') return r.status == 'Searching';
             if (_selectedFilter == 'Found / Reunited') {
@@ -167,6 +186,37 @@ class _MissingPersonsScreenState extends State<MissingPersonsScreen> {
               ),
               const SizedBox(height: 16),
 
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      city == PakistanCities.all
+                          ? 'Reports from every city'
+                          : 'Reports in $city',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                  Flexible(
+                    child: CityFilterChip(
+                      city: city,
+                      onChanged: (c) => setState(() => _city = c),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              CityCountStrip(
+                counts: cityCounts,
+                selected: city,
+                onSelected: (c) => setState(() => _city = c),
+              ),
+              const SizedBox(height: 12),
+
               // Filter Chips
               Wrap(
                 spacing: 8,
@@ -192,18 +242,30 @@ class _MissingPersonsScreenState extends State<MissingPersonsScreen> {
                 Container(
                   padding: const EdgeInsets.all(40),
                   alignment: Alignment.center,
-                  child: const Column(
+                  child: Column(
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.search_off,
                         size: 48,
                         color: AppColors.textSecondary,
                       ),
-                      SizedBox(height: 12),
+                      const SizedBox(height: 12),
                       Text(
-                        'No notices found under this filter.',
-                        style: TextStyle(color: AppColors.textSecondary),
+                        city == PakistanCities.all
+                            ? 'No notices found under this filter.'
+                            : 'No notices in $city under this filter.',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(color: AppColors.textSecondary),
                       ),
+                      if (city != PakistanCities.all) ...[
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: () =>
+                              setState(() => _city = PakistanCities.all),
+                          icon: const Icon(Icons.public),
+                          label: const Text('See all cities'),
+                        ),
+                      ],
                     ],
                   ),
                 )
@@ -269,6 +331,15 @@ class _MissingPersonsScreenState extends State<MissingPersonsScreen> {
             ),
             const SizedBox(height: 4),
             Text('${report.gender} • ${report.age} years • ${report.status}'),
+            const SizedBox(height: 6),
+            Align(
+              alignment: AlignmentDirectional.centerStart,
+              child: Chip(
+                visualDensity: VisualDensity.compact,
+                avatar: const Icon(Icons.place, size: 16),
+                label: Text(PakistanCities.label(cityOf(report))),
+              ),
+            ),
             const Divider(height: 24),
             Text(
               'Last seen: ${report.lastSeenLocation}',

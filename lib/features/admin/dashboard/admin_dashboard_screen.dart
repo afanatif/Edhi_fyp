@@ -17,6 +17,8 @@ import '../users/admin_users_view.dart';
 import '../users/admin_cancellation_alert.dart';
 import '../database/admin_database_view.dart';
 import '../fleet/registered_drivers_panel.dart';
+import '../fleet/driver_accountability_panel.dart';
+import '../fleet/dispatch_alert_banner.dart';
 import '../missing_persons/admin_missing_persons_view.dart';
 import '../../../models/employee.dart';
 import '../../../models/edhi_center.dart';
@@ -277,18 +279,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         ),
                         onPressed: () async {
                           try {
-                            await firestore.assignRequest(
-                              requestId: req.requestId,
-                              employeeId: driver.employeeId,
-                              employeeName:
-                                  '${driver.name} (${driver.vehicleNumber})',
+                            final dispatched = await firestore.dispatchToUnit(
+                              req.requestId,
+                              driver,
                             );
                             if (context.mounted) {
                               Navigator.pop(ctx);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
                                   content: Text(
-                                    'Mission #${req.requestId} assigned to ${driver.name} (${driver.vehicleNumber})',
+                                    dispatched.awaitingAcknowledgement
+                                        ? 'Mission #${req.requestId} offered to ${driver.name} — waiting up to 60 s for them to accept'
+                                        : 'Mission #${req.requestId} assigned to ${driver.name} (${driver.vehicleNumber})',
                                   ),
                                   backgroundColor: AppColors.reliefGreenMedium,
                                 ),
@@ -557,18 +559,18 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                               ),
                             ),
                             onPressed: () async {
-                              await firestore.assignRequest(
-                                requestId: req.requestId,
-                                employeeId: driver.employeeId,
-                                employeeName:
-                                    '${driver.name} (${driver.vehicleNumber})',
+                              final dispatched = await firestore.dispatchToUnit(
+                                req.requestId,
+                                driver,
                               );
                               if (context.mounted) {
                                 Navigator.pop(ctx);
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
+                                      dispatched.awaitingAcknowledgement
+                                          ? '${driver.vehicleNumber} offered #${req.requestId} — waiting up to 60 s for ${driver.name} to accept'
+                                          : 'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
                                     ),
                                     backgroundColor:
                                         AppColors.reliefGreenMedium,
@@ -998,6 +1000,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
                 const SizedBox(height: 16),
 
+                DispatchAlertBanner(
+                  requests: requests,
+                  onOpenMap: () => setState(() => _selectedTabIndex = 1),
+                ),
                 if (_selectedTabIndex != 6)
                   AdminCancellationAlert(
                     onReview: () => setState(() => _selectedTabIndex = 6),
@@ -2015,6 +2021,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             const SizedBox(height: 16),
 
             if (_fleetSubTab == 0) ...[
+              const DriverAccountabilityPanel(),
+              const SizedBox(height: 16),
               RegisteredDriversPanel(
                 ambulances: drivers,
                 stagingPoint: LocationService.defaultLocation,

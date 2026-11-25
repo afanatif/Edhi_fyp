@@ -8,6 +8,8 @@ import '../../../services/firestore_service.dart';
 import '../../../services/app_preferences_service.dart';
 import '../../../services/notification_service.dart';
 import '../../../models/feedback_item.dart';
+import '../../../core/constants/pakistan_cities.dart';
+import '../../../core/widgets/city_picker.dart';
 
 class UserProfileScreen extends StatefulWidget {
   const UserProfileScreen({super.key});
@@ -285,6 +287,74 @@ class _UserProfileScreenState extends State<UserProfileScreen> {
             controller: _addressController,
             label: 'Residential Address',
             prefixIcon: Icons.home_outlined,
+          ),
+          const SizedBox(height: 12),
+          Builder(
+            builder: (context) {
+              final auth = context.watch<AuthService>();
+              final city = PakistanCities.normalize(auth.currentUser?.city);
+              final source = auth.currentUser?.citySource ?? '';
+              return Material(
+                color: Colors.white,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: const BorderSide(color: AppColors.border),
+                ),
+                child: ListTile(
+                  leading: const Icon(
+                    Icons.location_city_rounded,
+                    color: AppColors.emergencyRed,
+                  ),
+                  title: Text(
+                    city.isEmpty ? PakistanCities.defaultCity : city,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  subtitle: Text(
+                    source == 'gps'
+                        ? 'Your city · detected by GPS'
+                        : source == 'manual'
+                        ? 'Your city · chosen by you'
+                        : 'Your city · default (tap to change)',
+                  ),
+                  trailing: const Text(
+                    'Change',
+                    style: TextStyle(
+                      color: AppColors.emergencyRed,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  onTap: () async {
+                    final picked = await showCityPicker(
+                      context,
+                      current: city,
+                      allowAll: false,
+                      title: 'Your city',
+                    );
+                    if (picked == null || !context.mounted) return;
+                    try {
+                      await context.read<AuthService>().updateOwnCity(picked);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'City set to $picked. Blood bank and missing persons now open on $picked.',
+                            ),
+                          ),
+                        );
+                      }
+                    } catch (_) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Could not save your city. Retry.'),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              );
+            },
           ),
           const SizedBox(height: 12),
           CustomTextField(

@@ -46,6 +46,16 @@ class StatusBadge extends StatelessWidget {
         fg = const Color(0xFF16A34A);
         icon = Icons.check_circle_rounded;
         break;
+      case 'Verified':
+        bg = const Color(0xFFDCFCE7);
+        fg = const Color(0xFF16A34A);
+        icon = Icons.verified_rounded;
+        break;
+      case 'Rejected':
+        bg = const Color(0xFFFEE2E2);
+        fg = const Color(0xFFDC2626);
+        icon = Icons.block_rounded;
+        break;
       case EmergencyStatus.cancelled:
       default:
         bg = const Color(0xFFF1F5F9);

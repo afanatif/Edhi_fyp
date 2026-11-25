@@ -15,6 +15,12 @@ class Donation {
   final String paymentStatus;
   final DateTime? createdAt;
 
+  /// HQ's reason when a payment is rejected (e.g. TID not found).
+  final String reviewNote;
+
+  bool get isAwaitingVerification => paymentStatus == 'AwaitingVerification';
+  bool get isRejected => status == 'Rejected';
+
   const Donation({
     required this.donationId,
     required this.userId,
@@ -29,6 +35,7 @@ class Donation {
     this.transactionReference = '',
     this.paymentStatus = 'NotApplicable',
     this.createdAt,
+    this.reviewNote = '',
   });
 
   factory Donation.fromMap(Map<String, dynamic> map, {String? docId}) {
@@ -53,6 +60,7 @@ class Donation {
       transactionReference: map['transactionReference'] ?? '',
       paymentStatus: map['paymentStatus'] ?? 'NotApplicable',
       createdAt: parseDate(map['createdAt']),
+      reviewNote: map['reviewNote'] as String? ?? '',
     );
   }
 
@@ -96,6 +104,7 @@ class Donation {
     String? transactionReference,
     String? paymentStatus,
     DateTime? createdAt,
+    String? reviewNote,
   }) {
     return Donation(
       donationId: donationId ?? this.donationId,
@@ -111,6 +120,7 @@ class Donation {
       transactionReference: transactionReference ?? this.transactionReference,
       paymentStatus: paymentStatus ?? this.paymentStatus,
       createdAt: createdAt ?? this.createdAt,
+      reviewNote: reviewNote ?? this.reviewNote,
     );
   }
 }

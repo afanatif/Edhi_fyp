@@ -1,5 +1,35 @@
 # Change log
 
+## 1.1.0 — 2026-11-25
+
+### Driver acknowledgement and accountability
+
+- Automatic dispatch now **offers** the job to the nearest driver with an account; they have 60 seconds to accept.
+- Accept starts the trip at once; **Decline** passes the job on immediately and is not a penalty.
+- No answer in 60 seconds is a **missed offer (penalty)** and the next-nearest ambulance is asked.
+- After three refusals, or when every nearby driver has passed, HQ gets a red alert and the round restarts.
+- Any open app moves the job on: HQ, the patient's app (no admin needed for linked drivers) or the driver's own app. Rules check the server clock (`dispatch_offers` collection, offer fields on requests and units).
+- Driverless (simulated) units keep accepting automatically.
+- Driver dashboard: ringing full-width offer card with countdown, Accept / Decline, and the driver's own response record.
+- HQ → Fleet: sortable **Driver accountability** table (offers, accepted, missed, declined, last accepted, average response), per-driver history and penalty reset.
+- Citizen tracker shows which driver is being asked and the seconds left.
+
+- **Auto-offline:** two missed offers in a row take a driver off duty so patients stop waiting on them; accepting or declining resets the count, and the driver switches back on with one tap. HQ sees an "Auto-offline" tag.
+
+### Donations: pay by QR
+
+- easypaisa QR card in Donate → Money: tap to enlarge, **Download QR**, account holder name and masked number, and a 4-step "how to send" guide with a PIN/OTP warning.
+- Transaction ID (TID) entry with paste button and format checks (pasted "TID: 3912 4455 019" is cleaned up), plus optional payment screenshot.
+- Each TID can be claimed only once: a `payment_refs` lock document is written with the donation and the rules refuse a second claim.
+- HQ shows the TID for matching against the account and can **Verify** or **Reject with a reason**; donors see the status and reason in My History.
+
+### Cities
+
+- Users get a home city from GPS on first sign-in (default Abbottabad), changeable from Home or Profile.
+- Fixed list of Pakistani cities so spellings group together; older free-text cities are mapped where possible, others show as "City not set".
+- Blood bank (urgent needs and donors) and missing persons open on the user's city, with a city switcher and "All cities".
+- New emergencies, blood needs and missing-person reports store a city; HQ blood bank and missing-person views show per-city counts and filters.
+
 ## 1.0.0 — 2026-10-03
 
 ### Connected portals

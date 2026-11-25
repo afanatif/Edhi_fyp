@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import '../../../core/constants/payment_accounts.dart';
+import 'pay_by_qr_card.dart';
 import 'package:provider/provider.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/widgets/custom_button.dart';
@@ -88,7 +91,9 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
   String _selectedCampaign = '';
   SelectedPhoto? _photo;
   String? _uploadedPhotoUrl;
-  String _paymentMethod = 'EasyPaisa';
+  SelectedPhoto? _paymentProof;
+  String? _tidError;
+  PaymentAccount get _account => PaymentAccounts.easypaisa;
   bool _isSubmitting = false;
 
   final List<double> _quickAmounts = [1000, 2500, 5000, 10000];
@@ -124,23 +129,28 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
       return;
     }
 
-    final amount = double.tryParse(_amountController.text) ?? 0.0;
-    if (_donationType == 'monetary' && amount <= 0) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a valid donation amount.')),
-      );
-      return;
-    }
+    final amount = double.tryParse(_amountController.text.trim()) ?? 0.0;
     if (_donationType == 'monetary' &&
-        _transactionController.text.trim().length < 6) {
+        (amount < PaymentAccounts.minAmount ||
+            amount > PaymentAccounts.maxAmount)) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Enter the transaction/reference ID from your payment receipt.',
+            'Enter an amount between PKR ${PaymentAccounts.minAmount.toStringAsFixed(0)} and PKR ${PaymentAccounts.maxAmount.toStringAsFixed(0)}.',
           ),
         ),
       );
       return;
+    }
+    if (_donationType == 'monetary') {
+      final problem = _account.validateTid(_transactionController.text);
+      setState(() => _tidError = problem);
+      if (problem != null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(problem)));
+        return;
+      }
     }
 
     setState(() => _isSubmitting = true);
@@ -148,7 +158,7 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
     final details = [
       if (_selectedCampaign.isNotEmpty) _selectedCampaign,
       if (_donationType == 'monetary')
-        'via $_paymentMethod'
+        'via ${_account.provider}'
       else
         'Pickup: ${_pickupAddressController.text.trim()}',
     ];
@@ -164,9 +174,9 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
       status: 'Pending',
       notes: noteText,
       campaign: _selectedCampaign,
-      paymentMethod: _donationType == 'monetary' ? _paymentMethod : '',
+      paymentMethod: _donationType == 'monetary' ? _account.provider : '',
       transactionReference: _donationType == 'monetary'
-          ? _transactionController.text.trim()
+          ? PaymentAccount.normalizeTid(_transactionController.text)
           : '',
       paymentStatus: _donationType == 'monetary'
           ? 'AwaitingVerification'
@@ -175,6 +185,13 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
 
     try {
       var submittedDonation = donation;
+      if (_donationType == 'monetary' && _paymentProof != null) {
+        _uploadedPhotoUrl ??= await firestore.uploadDonationPhoto(
+          _paymentProof!.bytes,
+          _paymentProof!.contentType,
+        );
+        submittedDonation = donation.copyWith(photoUrl: _uploadedPhotoUrl);
+      }
       if (_donationType == 'clothing' && _photo != null) {
         _uploadedPhotoUrl ??= await firestore.uploadDonationPhoto(
           _photo!.bytes,
@@ -183,7 +200,15 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
         submittedDonation = donation.copyWith(photoUrl: _uploadedPhotoUrl);
       }
       final donationId = await firestore.submitDonation(submittedDonation);
-      if (mounted) _showReceiptDialog(donationId, submittedDonation);
+      if (mounted) {
+        _showReceiptDialog(donationId, submittedDonation);
+        setState(() {
+          _transactionController.clear();
+          _paymentProof = null;
+          _uploadedPhotoUrl = null;
+          _tidError = null;
+        });
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -240,8 +265,10 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text(
-                    'OFFICIAL EDHI FOUNDATION RECEIPT',
+                  Text(
+                    donation.donationType == 'monetary'
+                        ? 'PAYMENT SUBMITTED · AWAITING HQ VERIFICATION'
+                        : 'IN-KIND DONATION REQUEST',
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.w900,
@@ -292,6 +319,13 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
                 ],
               ),
             ),
+            if (donation.donationType == 'monetary') ...[
+              const SizedBox(height: 10),
+              Text(
+                'Transaction ID ${donation.transactionReference} via ${donation.paymentMethod}. You will be notified when HQ confirms it; see My History for the status.',
+                style: const TextStyle(fontSize: 12),
+              ),
+            ],
             const SizedBox(height: 12),
             const Text(
               'May Allah reward your contribution. Edhi Foundation ensures 100% transparent utilization.',
@@ -481,29 +515,64 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
                 }).toList(),
               ),
               const SizedBox(height: 16),
+              ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _amountController,
+                builder: (context, value, _) => PayByQrCard(
+                  account: _account,
+                  amount: double.tryParse(value.text.trim()) ?? 0,
+                ),
+              ),
+              const SizedBox(height: 16),
               const Text(
-                'Payment Channel',
+                'After paying',
                 style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
               ),
               const SizedBox(height: 8),
-              Row(
-                children: [
-                  _buildPaymentOption('EasyPaisa'),
-                  const SizedBox(width: 8),
-                  _buildPaymentOption('JazzCash'),
-                  const SizedBox(width: 8),
-                  _buildPaymentOption('Bank Transfer'),
-                ],
+              TextField(
+                key: const Key('tidField'),
+                controller: _transactionController,
+                textInputAction: TextInputAction.done,
+                onChanged: (_) {
+                  if (_tidError != null) setState(() => _tidError = null);
+                },
+                decoration: InputDecoration(
+                  labelText: '${_account.appName} Transaction ID (TID)',
+                  hintText: 'e.g. 39124455019',
+                  errorText: _tidError,
+                  errorMaxLines: 3,
+                  prefixIcon: const Icon(Icons.verified_user_outlined),
+                  suffixIcon: IconButton(
+                    tooltip: 'Paste',
+                    icon: const Icon(Icons.content_paste_rounded),
+                    onPressed: () async {
+                      final data = await Clipboard.getData('text/plain');
+                      final text = data?.text ?? '';
+                      if (text.isEmpty) return;
+                      setState(() {
+                        _transactionController.text =
+                            PaymentAccount.normalizeTid(text);
+                        _tidError = null;
+                      });
+                    },
+                  ),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
-              CustomTextField(
-                controller: _transactionController,
-                label: 'Payment Transaction / Reference ID',
-                prefixIcon: Icons.verified_user_outlined,
+              PhotoPickerField(
+                label: 'Payment screenshot (optional, speeds up verification)',
+                value: _paymentProof,
+                enabled: !_isSubmitting,
+                onChanged: (photo) => setState(() {
+                  _paymentProof = photo;
+                  _uploadedPhotoUrl = null;
+                }),
               ),
               const SizedBox(height: 6),
               const Text(
-                'Payments remain pending until the Edhi account webhook or an administrator verifies the reference. Never share your PIN or OTP.',
+                'Your donation stays "Awaiting verification" until HQ matches the Transaction ID with the account. Each TID can be used only once.',
                 style: TextStyle(
                   fontSize: 10.5,
                   color: AppColors.textSecondary,
@@ -552,7 +621,7 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
 
             CustomButton(
               text: _donationType == 'monetary'
-                  ? 'Donate & Generate Receipt'
+                  ? 'I have paid · Submit for verification'
                   : 'Request In-Kind Pickup',
               icon: Icons.favorite,
               color: AppColors.reliefGreenMedium,
@@ -606,40 +675,6 @@ class _MakeDonationTabState extends State<_MakeDonationTab> {
                 textAlign: TextAlign.center,
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPaymentOption(String name) {
-    final isSelected = _paymentMethod == name;
-    return Expanded(
-      child: InkWell(
-        onTap: () => setState(() => _paymentMethod = name),
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: isSelected ? AppColors.reliefGreenSoft : Colors.white,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isSelected
-                  ? AppColors.reliefGreenMedium
-                  : AppColors.border,
-            ),
-          ),
-          child: Center(
-            child: Text(
-              name,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w700 : FontWeight.normal,
-                color: isSelected
-                    ? AppColors.reliefGreenDark
-                    : AppColors.textPrimary,
-              ),
-            ),
           ),
         ),
       ),
@@ -856,6 +891,26 @@ class _DonationHistoryTab extends StatelessWidget {
                             color: AppColors.textPrimary,
                           ),
                         ),
+                        if (isMonetary && don.transactionReference.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              don.isRejected
+                                  ? 'Not confirmed: ${don.reviewNote.isEmpty ? 'HQ could not find this payment.' : don.reviewNote}'
+                                  : don.isAwaitingVerification
+                                  ? 'TID ${don.transactionReference} · awaiting HQ verification'
+                                  : 'TID ${don.transactionReference} · payment confirmed',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: don.isRejected
+                                    ? AppColors.emergencyRed
+                                    : don.isAwaitingVerification
+                                    ? AppColors.statusPending
+                                    : AppColors.reliefGreenDark,
+                              ),
+                            ),
+                          ),
                         if (don.photoUrl.isNotEmpty)
                           AttachmentPhoto(url: don.photoUrl),
                         const SizedBox(height: 4),

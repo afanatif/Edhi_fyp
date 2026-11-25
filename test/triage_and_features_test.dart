@@ -242,6 +242,15 @@ void main() {
           autoAssignNearest: true,
         );
 
+        // The nearest driver has an account, so they are offered the job and
+        // must acknowledge it before the request is assigned.
+        final offered = (await service.getRequestsStream().first).firstWhere(
+          (r) => r.requestId == reqId,
+        );
+        expect(offered.status, EmergencyStatus.pending);
+        expect(offered.offerEmployeeId, 'driver_mock_2');
+        await service.acceptDispatchOffer(offered.offerId!);
+
         final requests = await service.getRequestsStream().first;
         final assignedReq = requests.firstWhere((r) => r.requestId == reqId);
         expect(assignedReq.status, EmergencyStatus.assigned);
@@ -538,6 +547,11 @@ void main() {
           req,
           autoAssignNearest: true,
         );
+        final offered = (await service.getRequestsStream().first).firstWhere(
+          (r) => r.requestId == reqId,
+        );
+        expect(offered.offerEmployeeId, nearestSupply.employee.employeeId);
+        await service.acceptDispatchOffer(offered.offerId!);
         final requests = await service.getRequestsStream().first;
         final submitted = requests.firstWhere((r) => r.requestId == reqId);
 

@@ -13,6 +13,12 @@ class AppUser {
   final bool isActive;
   final DateTime? createdAt;
 
+  /// Home city used to group blood donors and missing persons ('' = not set).
+  final String city;
+
+  /// How the city was chosen: 'gps', 'manual' or 'default'.
+  final String citySource;
+
   const AppUser({
     required this.id,
     required this.name,
@@ -24,6 +30,8 @@ class AppUser {
     this.profileImage = '',
     this.isActive = true,
     this.createdAt,
+    this.city = '',
+    this.citySource = '',
   });
 
   bool get isAdmin => role == 'admin';
@@ -83,6 +91,8 @@ class AppUser {
       profileImage: map['profileImage'] ?? '',
       isActive: map['isActive'] ?? true,
       createdAt: parseDate(map['createdAt']),
+      city: map['city'] as String? ?? '',
+      citySource: map['citySource'] as String? ?? '',
     );
   }
 
@@ -106,6 +116,8 @@ class AppUser {
       'createdAt': createdAt != null
           ? Timestamp.fromDate(createdAt!)
           : FieldValue.serverTimestamp(),
+      if (city.isNotEmpty) 'city': city,
+      if (citySource.isNotEmpty) 'citySource': citySource,
     };
   }
 
@@ -120,6 +132,8 @@ class AppUser {
     String? profileImage,
     bool? isActive,
     DateTime? createdAt,
+    String? city,
+    String? citySource,
   }) {
     return AppUser(
       id: id ?? this.id,
@@ -132,6 +146,8 @@ class AppUser {
       profileImage: profileImage ?? this.profileImage,
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
+      city: city ?? this.city,
+      citySource: citySource ?? this.citySource,
     );
   }
 }

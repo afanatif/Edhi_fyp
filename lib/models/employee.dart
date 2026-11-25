@@ -20,6 +20,30 @@ class Employee {
   final DateTime? locationUpdatedAt;
   final bool isDemo;
   final bool isSimulated;
+
+  /// Request this unit has been offered and must accept or decline.
+  final String pendingOfferRequestId;
+  final DateTime? pendingOfferAt;
+
+  /// HQ cleared this driver's penalties at this time; older offers don't count.
+  final DateTime? penaltyResetAt;
+
+  /// Offers missed in a row; accepting or declining resets it to 0.
+  final int missedStreak;
+
+  /// Set when the app took this unit off duty after repeated missed offers.
+  final DateTime? autoOfflineAt;
+
+  bool get isAutoOffline => status == 'offline' && autoOfflineAt != null;
+
+  /// A unit with a linked driver account must acknowledge automatic offers.
+  bool get needsAcknowledgement => userId.isNotEmpty;
+
+  /// True while an offer for another patient is waiting on this driver.
+  bool hasLiveOffer(DateTime now) =>
+      pendingOfferRequestId.isNotEmpty &&
+      pendingOfferAt != null &&
+      now.isBefore(pendingOfferAt!.add(const Duration(seconds: 60 + 5)));
   bool get hasValidLocation =>
       currentLat.isFinite &&
       currentLng.isFinite &&
@@ -60,6 +84,11 @@ class Employee {
     this.locationUpdatedAt,
     this.isDemo = false,
     this.isSimulated = true,
+    this.pendingOfferRequestId = '',
+    this.pendingOfferAt,
+    this.penaltyResetAt,
+    this.missedStreak = 0,
+    this.autoOfflineAt,
   });
 
   factory Employee.fromMap(Map<String, dynamic> map, {String? docId}) {
@@ -82,6 +111,11 @@ class Employee {
       transitLastHeartbeat: (map['transitLastHeartbeat'] as num?)?.toInt(),
       locationUpdatedAt: (map['locationUpdatedAt'] as Timestamp?)?.toDate(),
       isSimulated: map['isSimulated'] as bool? ?? true,
+      pendingOfferRequestId: map['pendingOfferRequestId'] as String? ?? '',
+      pendingOfferAt: (map['pendingOfferAt'] as Timestamp?)?.toDate(),
+      penaltyResetAt: (map['penaltyResetAt'] as Timestamp?)?.toDate(),
+      missedStreak: (map['missedStreak'] as num?)?.toInt() ?? 0,
+      autoOfflineAt: (map['autoOfflineAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -137,6 +171,13 @@ class Employee {
     DateTime? locationUpdatedAt,
     bool? isDemo,
     bool? isSimulated,
+    String? pendingOfferRequestId,
+    DateTime? pendingOfferAt,
+    bool clearOffer = false,
+    DateTime? penaltyResetAt,
+    int? missedStreak,
+    DateTime? autoOfflineAt,
+    bool clearAutoOffline = false,
   }) {
     return Employee(
       employeeId: employeeId ?? this.employeeId,
@@ -156,6 +197,15 @@ class Employee {
       locationUpdatedAt: locationUpdatedAt ?? this.locationUpdatedAt,
       isDemo: isDemo ?? this.isDemo,
       isSimulated: isSimulated ?? this.isSimulated,
+      pendingOfferRequestId: clearOffer
+          ? ''
+          : pendingOfferRequestId ?? this.pendingOfferRequestId,
+      pendingOfferAt: clearOffer ? null : pendingOfferAt ?? this.pendingOfferAt,
+      penaltyResetAt: penaltyResetAt ?? this.penaltyResetAt,
+      missedStreak: missedStreak ?? this.missedStreak,
+      autoOfflineAt: clearAutoOffline
+          ? null
+          : autoOfflineAt ?? this.autoOfflineAt,
       transitRunnerSession: clearTransitState
           ? null
           : transitRunnerSession ?? this.transitRunnerSession,

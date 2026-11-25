@@ -312,11 +312,9 @@ class _AdminDispatchMapViewState extends State<AdminDispatchMapView> {
                           ),
                           onPressed: () async {
                             try {
-                              await firestore.assignRequest(
-                                requestId: req.requestId,
-                                employeeId: driver.employeeId,
-                                employeeName:
-                                    '${driver.name} (${driver.vehicleNumber})',
+                              final dispatched = await firestore.dispatchToUnit(
+                                req.requestId,
+                                driver,
                               );
                               if (ctx.mounted) Navigator.pop(ctx);
                               if (mounted) {
@@ -324,7 +322,9 @@ class _AdminDispatchMapViewState extends State<AdminDispatchMapView> {
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   SnackBar(
                                     content: Text(
-                                      'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
+                                      dispatched.awaitingAcknowledgement
+                                          ? '${driver.vehicleNumber} offered #${req.requestId} — waiting up to 60 s for ${driver.name} to accept'
+                                          : 'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
                                     ),
                                     backgroundColor:
                                         AppColors.reliefGreenMedium,
@@ -394,7 +394,9 @@ class _AdminDispatchMapViewState extends State<AdminDispatchMapView> {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'Auto-dispatched ${result.employee.vehicleNumber} (${result.employee.name}) • ${result.distanceKm} km away • ~${result.etaMinutes} mins ETA!',
+                    result.awaitingAcknowledgement
+                        ? 'Offered to ${result.employee.name} (${result.employee.vehicleNumber}) • ${result.distanceKm.toStringAsFixed(1)} km • waiting up to 60 s for them to accept'
+                        : 'Auto-dispatched ${result.employee.vehicleNumber} (${result.employee.name}) • ${result.distanceKm.toStringAsFixed(1)} km away • ~${result.etaMinutes} mins ETA!',
                     style: GoogleFonts.inter(
                       fontWeight: FontWeight.w600,
                       fontSize: 12.5,
@@ -582,12 +584,11 @@ class _AdminDispatchMapViewState extends State<AdminDispatchMapView> {
                                 ? null
                                 : () async {
                                     try {
-                                      await firestore.assignRequest(
-                                        requestId: req.requestId,
-                                        employeeId: driver.employeeId,
-                                        employeeName:
-                                            '${driver.name} (${driver.vehicleNumber})',
-                                      );
+                                      final dispatched = await firestore
+                                          .dispatchToUnit(
+                                            req.requestId,
+                                            driver,
+                                          );
                                       if (ctx.mounted) Navigator.pop(ctx);
                                       if (mounted) {
                                         setState(
@@ -598,7 +599,9 @@ class _AdminDispatchMapViewState extends State<AdminDispatchMapView> {
                                         ).showSnackBar(
                                           SnackBar(
                                             content: Text(
-                                              'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
+                                              dispatched.awaitingAcknowledgement
+                                                  ? '${driver.vehicleNumber} offered #${req.requestId} — waiting up to 60 s for ${driver.name} to accept'
+                                                  : 'Unit ${driver.vehicleNumber} dispatched to #${req.requestId}!',
                                             ),
                                             backgroundColor:
                                                 AppColors.reliefGreenMedium,

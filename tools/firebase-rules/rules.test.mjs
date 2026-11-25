@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
+import * as firestoreMod from 'firebase/firestore';
 import { doc, setDoc, getDoc, updateDoc, deleteDoc, runTransaction, collection, query, where, getDocs, Timestamp, serverTimestamp, Bytes } from 'firebase/firestore';
 import { ref, uploadBytes, getBytes } from 'firebase/storage';
 
@@ -572,5 +573,119 @@ try {
     assert.equal((await getDoc(doc(publicDb, 'login_aliases', 'cnic_6110199988771'))).exists(), false);
     await assertFails(getDoc(doc(created, 'donations', 'created-donation')));
   });
+  // ---------------- Driver acknowledgement (60-second offers) ----------------
+  const ackDriver = env.authenticatedContext('ack-driver').firestore();
+  const ackDriver2 = env.authenticatedContext('ack-driver2').firestore();
+  const longAgo = Timestamp.fromMillis(Date.now() - 2 * 60 * 1000);
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    for (const uid of ['ack-driver', 'ack-driver2']) await setDoc(doc(db, 'users', uid), { role: 'employee', isActive: true });
+    await setDoc(doc(db, 'employees', 'ackA'), { userId: 'ack-driver', role: 'driver', status: 'available', activeRequestId: '', pendingOfferRequestId: '', pendingOfferAt: null });
+    await setDoc(doc(db, 'employees', 'ackB'), { userId: 'ack-driver2', role: 'driver', status: 'available', activeRequestId: '', pendingOfferRequestId: '', pendingOfferAt: null });
+    await setDoc(doc(db, 'employees', 'ackDriverless'), { userId: '', role: 'driver', status: 'available', activeRequestId: '' });
+    const base = { userId: 'citizen', status: 'Pending', assignedEmployeeId: null, fraudRiskLevel: 'Low', isVerified: true,
+      offerId: null, offerEmployeeId: null, offerAt: null, offerAttempts: 0, skippedEmployeeIds: [], dispatchAlert: false, createdAt: Timestamp.now() };
+    await setDoc(doc(db, 'emergency_requests', 'ack-job'), base);
+    // A job whose offer to ackB went out two minutes ago and was never answered.
+    await setDoc(doc(db, 'emergency_requests', 'ack-stale'), { ...base, offerId: 'stale-offer', offerEmployeeId: 'ackB', offerAt: longAgo, offerAttempts: 1 });
+    await setDoc(doc(db, 'dispatch_offers', 'stale-offer'), { requestId: 'ack-stale', requestUserId: 'citizen', employeeId: 'ackB',
+      driverUserId: 'ack-driver2', outcome: 'pending', offeredAt: longAgo, respondedAt: null });
+  });
+  const offerFields = (id, employeeId, driverUserId, requestId) => ({ requestId, requestUserId: 'citizen', employeeId, driverUserId,
+    driverName: 'D', vehicleNumber: 'V', emergencyType: 'Medical Emergency', priority: 'Critical P1', address: 'Pin',
+    latitude: 34.1, longitude: 73.2, distanceKm: 1.2, attempt: 1, outcome: 'pending', offeredAt: serverTimestamp(), respondedAt: null });
+  const makeOffer = (db, offerId, employeeId, driverUserId, requestId = 'ack-job', attempts = 1) => runTransaction(db, async (tx) => {
+    await tx.get(doc(db, 'emergency_requests', requestId));
+    tx.update(doc(db, 'emergency_requests', requestId), { offerId, offerEmployeeId: employeeId, offerAt: serverTimestamp(), offerAttempts: attempts, updatedAt: serverTimestamp() });
+    tx.update(doc(db, 'employees', employeeId), { pendingOfferRequestId: requestId, pendingOfferAt: serverTimestamp() });
+    tx.set(doc(db, 'dispatch_offers', offerId), offerFields(offerId, employeeId, driverUserId, requestId));
+  });
+  await test('Citizen cannot pre-fill offer or skip fields when creating a request', () => assertFails(setDoc(doc(citizen, 'emergency_requests', 'forged-offer'),
+    { userId: 'citizen', status: 'Pending', assignedEmployeeId: null, offerEmployeeId: 'ackA', createdAt: serverTimestamp() })));
+  await test('Citizen app cannot offer its request to a driverless unit', () => assertFails(makeOffer(citizen, 'offer-x', 'ackDriverless', '')));
+  await test('Citizen app offers its own waiting request to a linked driver atomically', () => assertSucceeds(makeOffer(citizen, 'offer-1', 'ackA', 'ack-driver')));
+  await test('Only the offered driver and the patient can read the offer and request', async () => {
+    await assertSucceeds(getDoc(doc(ackDriver, 'dispatch_offers', 'offer-1')));
+    await assertSucceeds(getDoc(doc(ackDriver, 'emergency_requests', 'ack-job')));
+    await assertSucceeds(getDocs(query(collection(ackDriver, 'dispatch_offers'), where('driverUserId', '==', 'ack-driver'))));
+    await assertFails(getDoc(doc(other, 'dispatch_offers', 'offer-1')));
+    await assertFails(getDoc(doc(ackDriver2, 'emergency_requests', 'ack-job')));
+  });
+  await test('A second offer cannot stack while one is waiting', () => assertFails(makeOffer(citizen, 'offer-stack', 'ackB', 'ack-driver2', 'ack-job', 2)));
+  await test('Nobody can time out an offer before 60 seconds', () => assertFails(runTransaction(citizen, async (tx) => {
+    await tx.get(doc(citizen, 'emergency_requests', 'ack-job'));
+    tx.update(doc(citizen, 'emergency_requests', 'ack-job'), { offerId: null, offerEmployeeId: null, offerAt: null, skippedEmployeeIds: ['ackA'], dispatchAlert: false, updatedAt: serverTimestamp() });
+    tx.update(doc(citizen, 'dispatch_offers', 'offer-1'), { outcome: 'missed', respondedAt: serverTimestamp() });
+  })));
+  await test('Offered driver declines in time; the job is released and the driver skipped', () => assertSucceeds(runTransaction(ackDriver, async (tx) => {
+    await tx.get(doc(ackDriver, 'emergency_requests', 'ack-job'));
+    tx.update(doc(ackDriver, 'emergency_requests', 'ack-job'), { offerId: null, offerEmployeeId: null, offerAt: null, skippedEmployeeIds: ['ackA'], dispatchAlert: false, updatedAt: serverTimestamp() });
+    tx.update(doc(ackDriver, 'dispatch_offers', 'offer-1'), { outcome: 'declined', respondedAt: serverTimestamp() });
+    tx.update(doc(ackDriver, 'employees', 'ackA'), { pendingOfferRequestId: '', pendingOfferAt: null });
+  })));
+  await test('A driver who passed is not offered the same job again this round', () => assertFails(makeOffer(citizen, 'offer-again', 'ackA', 'ack-driver', 'ack-job', 2)));
+  await test('Next-nearest driver is offered the job', () => assertSucceeds(makeOffer(citizen, 'offer-2', 'ackB', 'ack-driver2', 'ack-job', 2)));
+  await test('Another driver cannot accept someone else\'s offer', () => assertFails(runTransaction(ackDriver, async (tx) => {
+    await tx.get(doc(ackDriver, 'emergency_requests', 'ack-job'));
+    tx.update(doc(ackDriver, 'emergency_requests', 'ack-job'), { status: 'InProgress', assignedEmployeeId: 'ackB', assignedEmployeeName: 'x', assignedDriverUserId: 'ack-driver', offerId: null, offerEmployeeId: null, offerAt: null, acceptedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+  })));
+  const accept = (db, uid, unit, requestId, offerId) => runTransaction(db, async (tx) => {
+    await tx.get(doc(db, 'emergency_requests', requestId));
+    tx.update(doc(db, 'emergency_requests', requestId), { status: 'InProgress', assignedEmployeeId: unit, assignedEmployeeName: 'Driver (V)', assignedDriverUserId: uid,
+      offerId: null, offerEmployeeId: null, offerAt: null, acceptedAt: serverTimestamp(), updatedAt: serverTimestamp() });
+    tx.update(doc(db, 'employees', unit), { status: 'busy', activeRequestId: requestId, pendingOfferRequestId: '', pendingOfferAt: null });
+    tx.update(doc(db, 'dispatch_offers', offerId), { outcome: 'accepted', respondedAt: serverTimestamp() });
+    tx.set(doc(db, 'route_demos', unit), { requestId, userId: 'citizen', driverUserId: uid, enabled: true, points: [{ lat: 34.1, lng: 73.2 }, { lat: 34.11, lng: 73.21 }],
+      startedAt: serverTimestamp(), durationSeconds: 120, speedFactor: 1, pausedAt: null, stoppedAt: null, simulation: true });
+  });
+  await test('Offered driver accepts in time: request, unit, offer and road trip commit together', () => assertSucceeds(accept(ackDriver2, 'ack-driver2', 'ackB', 'ack-job', 'offer-2')));
+  await test('Late acceptance after 60 seconds is refused', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'employees', 'ackB'), { userId: 'ack-driver2', role: 'driver', status: 'available', activeRequestId: '', pendingOfferRequestId: 'ack-stale', pendingOfferAt: longAgo });
+    });
+    await assertFails(accept(ackDriver2, 'ack-driver2', 'ackB', 'ack-stale', 'stale-offer'));
+  });
+  await test('After 60 seconds the patient app marks the offer missed (driver penalty) and moves on', () => assertSucceeds(runTransaction(citizen, async (tx) => {
+    await tx.get(doc(citizen, 'emergency_requests', 'ack-stale'));
+    tx.update(doc(citizen, 'emergency_requests', 'ack-stale'), { offerId: null, offerEmployeeId: null, offerAt: null, skippedEmployeeIds: ['ackB'], dispatchAlert: false, updatedAt: serverTimestamp() });
+    tx.update(doc(citizen, 'dispatch_offers', 'stale-offer'), { outcome: 'missed', respondedAt: serverTimestamp() });
+  })));
+  await test('A missed offer cannot be rewritten as accepted', () => assertFails(updateDoc(doc(ackDriver2, 'dispatch_offers', 'stale-offer'), { outcome: 'accepted', respondedAt: serverTimestamp() })));
+  // ---------------- Auto-offline after 2 missed offers in a row ----------------
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'employees', 'ackC'), { userId: 'ack-driver', role: 'driver', status: 'available', activeRequestId: '', missedStreak: 1, lastMissedOfferId: 'old-miss' });
+    await setDoc(doc(db, 'emergency_requests', 'ack-miss2'), { userId: 'citizen', status: 'Pending', assignedEmployeeId: null, offerId: 'miss-2', offerEmployeeId: 'ackC',
+      offerAt: longAgo, offerAttempts: 1, skippedEmployeeIds: [], dispatchAlert: false, createdAt: longAgo });
+    await setDoc(doc(db, 'dispatch_offers', 'miss-2'), { requestId: 'ack-miss2', requestUserId: 'citizen', employeeId: 'ackC', driverUserId: 'ack-driver', outcome: 'pending', offeredAt: longAgo, respondedAt: null });
+  });
+  const missTwice = (unitFields) => runTransaction(citizen, async (tx) => {
+    await tx.get(doc(citizen, 'emergency_requests', 'ack-miss2'));
+    tx.update(doc(citizen, 'emergency_requests', 'ack-miss2'), { offerId: null, offerEmployeeId: null, offerAt: null, skippedEmployeeIds: ['ackC'], dispatchAlert: false, updatedAt: serverTimestamp() });
+    tx.update(doc(citizen, 'dispatch_offers', 'miss-2'), { outcome: 'missed', respondedAt: serverTimestamp() });
+    tx.update(doc(citizen, 'employees', 'ackC'), unitFields);
+  });
+  await test('Second miss in a row cannot leave the driver on duty', () => assertFails(missTwice({ missedStreak: 2, lastMissedOfferId: 'miss-2' })));
+  await test('Second miss in a row takes the driver off duty', () => assertSucceeds(missTwice({ missedStreak: 2, lastMissedOfferId: 'miss-2', status: 'offline', autoOfflineAt: serverTimestamp() })));
+  await test('A citizen cannot take a driver off duty without a missed offer', () => assertFails(updateDoc(doc(citizen, 'employees', 'ackA'), { status: 'offline', autoOfflineAt: serverTimestamp(), missedStreak: 9, lastMissedOfferId: 'offer-2' })));
+  await test('Driver switches back on duty and the auto-offline mark clears', () => assertSucceeds(updateDoc(doc(ackDriver, 'employees', 'ackC'), { status: 'available', autoOfflineAt: null, missedStreak: 0 })));
+  // ---------------- Payment Transaction ID lock ----------------
+  const payDonation = (db, uid, id, tid) => {
+    const { writeBatch } = firestoreMod;
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'donations', id), { userId: uid, status: 'Pending', amount: 500, donationType: 'monetary',
+      paymentMethod: 'easypaisa', transactionReference: tid, paymentStatus: 'AwaitingVerification' });
+    batch.set(doc(db, 'payment_refs', 'easypaisa_' + tid), { userId: uid, donationId: id, createdAt: serverTimestamp() });
+    return batch.commit();
+  };
+  await test('A paid donation locks its Transaction ID atomically', () => assertSucceeds(payDonation(citizen, 'citizen', 'pay-1', '39124455019')));
+  await test('The same Transaction ID cannot be claimed twice, even by someone else', async () => {
+    await assertFails(payDonation(citizen, 'citizen', 'pay-2', '39124455019'));
+    await assertFails(payDonation(other, 'other', 'pay-3', '39124455019'));
+  });
+  await test('A monetary claim without its TID lock is refused', () => assertFails(setDoc(doc(citizen, 'donations', 'pay-4'),
+    { userId: 'citizen', status: 'Pending', paymentMethod: 'easypaisa', transactionReference: '39124455020' })));
+  await test('Other users cannot read someone else\'s payment lock', () => assertFails(getDoc(doc(other, 'payment_refs', 'easypaisa_39124455019'))));
+  await test('Citizen can store a city on their own profile', () => assertSucceeds(updateDoc(doc(citizen, 'users', 'citizen'), { city: 'Lahore', citySource: 'gps' })));
   console.log(`${passed} Firebase rules tests passed.`);
 } finally { await env.cleanup(); }

@@ -15,6 +15,11 @@ class MissingPersonReport {
   final DateTime? lastSeenAt;
   final String userId;
 
+  /// City where the person was last seen ('' for older reports).
+  final String city;
+  final double? lastSeenLat;
+  final double? lastSeenLng;
+
   const MissingPersonReport({
     required this.reportId,
     required this.personName,
@@ -29,6 +34,9 @@ class MissingPersonReport {
     this.photoUrl = '',
     this.lastSeenAt,
     this.userId = '',
+    this.city = '',
+    this.lastSeenLat,
+    this.lastSeenLng,
   });
 
   bool get isSearching => status == 'Searching';
@@ -62,6 +70,9 @@ class MissingPersonReport {
           ? null
           : parseDate(map['lastSeenAt']),
       userId: map['userId'] ?? '',
+      city: map['city'] as String? ?? '',
+      lastSeenLat: (map['lastSeenLat'] as num?)?.toDouble(),
+      lastSeenLng: (map['lastSeenLng'] as num?)?.toDouble(),
     );
   }
 
@@ -89,6 +100,9 @@ class MissingPersonReport {
       'photoUrl': photoUrl,
       'lastSeenAt': lastSeenAt == null ? null : Timestamp.fromDate(lastSeenAt!),
       'userId': userId,
+      'city': city,
+      'lastSeenLat': lastSeenLat,
+      'lastSeenLng': lastSeenLng,
     };
   }
 
@@ -106,6 +120,9 @@ class MissingPersonReport {
     String? photoUrl,
     DateTime? lastSeenAt,
     String? userId,
+    String? city,
+    double? lastSeenLat,
+    double? lastSeenLng,
   }) {
     return MissingPersonReport(
       reportId: reportId ?? this.reportId,
@@ -121,6 +138,9 @@ class MissingPersonReport {
       photoUrl: photoUrl ?? this.photoUrl,
       lastSeenAt: lastSeenAt ?? this.lastSeenAt,
       userId: userId ?? this.userId,
+      city: city ?? this.city,
+      lastSeenLat: lastSeenLat ?? this.lastSeenLat,
+      lastSeenLng: lastSeenLng ?? this.lastSeenLng,
     );
   }
 }
